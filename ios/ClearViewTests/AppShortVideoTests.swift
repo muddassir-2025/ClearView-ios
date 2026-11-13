@@ -397,19 +397,30 @@ final class AppShortVideoTests: XCTestCase {
     }
 
     /// YouTube's watch-next feed shows a floating row of filter chips ("All",
-    /// "From <channel>", "Related", "For you") while scrolling. It is separate
-    /// from the Home feed chip bar, so both must be removed by the app shell.
+    /// "From <channel>", "Related", "For you") while scrolling. Only the chip
+    /// renderers are removed. A surrounding layout slot can also contain the
+    /// watch title, action bar, and comments, so hiding a generic wrapper hid
+    /// that metadata in some signed-in layouts.
     func testYouTubeRelatedChipBarsAreRemovedWithAppShell() async throws {
         let web = WKWebView(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
         web.loadHTMLString("""
         <html><head><meta name="viewport" content="width=device-width,initial-scale=1">
-        <style>body{margin:0}ytm-app,ytm-related-chip-cloud-renderer,.related-chips-slot-wrapper,
-        #filter-chip-bar,ytm-rich-item-renderer{display:block}.related-chips-slot-wrapper{height:52px}
-        #filter-chip-bar{height:48px}</style></head>
+        <style>body{margin:0}ytm-app,ytm-related-chip-cloud-renderer,ytm-chip-cloud-renderer,
+        .related-chips-slot-wrapper,#filter-chip-bar,ytm-rich-item-renderer,
+        ytm-slim-video-metadata-section-renderer,ytm-slim-video-action-bar-renderer,
+        ytm-comments-section-renderer{display:block}.related-chips-slot-wrapper{min-height:52px}
+        #filter-chip-bar{min-height:48px}</style></head>
         <body><ytm-app><div class="page-container">
-          <div class="related-chips-slot-wrapper"><ytm-related-chip-cloud-renderer class="chips-fixed-positioning chips-visible"><ytm-chip-cloud-renderer class="chip-bar">All From Morley Kert Related For you</ytm-chip-cloud-renderer></ytm-related-chip-cloud-renderer></div>
-          <div id="related-chips-sentinel" class="related-chips-sentinel"></div>
+          <div class="related-chips-slot-wrapper">
+            <ytm-slim-video-metadata-section-renderer id="metadata">Secretly Building my Wife's Dream Patio</ytm-slim-video-metadata-section-renderer>
+            <ytm-slim-video-action-bar-renderer id="likes">19M likes</ytm-slim-video-action-bar-renderer>
+            <ytm-related-chip-cloud-renderer id="relatedChips" class="chips-fixed-positioning chips-visible"><ytm-chip-cloud-renderer class="chip-bar">All From Morley Kert Related For you</ytm-chip-cloud-renderer></ytm-related-chip-cloud-renderer>
+            <ytm-comments-section-renderer id="comments">Comments</ytm-comments-section-renderer>
+          </div>
+          <div id="related-chips-sentinel" class="related-chips-sentinel">sentinel</div>
           <div id="filter-chip-bar">All From Morley Kert Related For you</div>
+          <ytm-feed-filter-chip-bar-renderer id="homeChips"><ytm-chip-cloud-renderer class="chip-bar">Home chips</ytm-chip-cloud-renderer></ytm-feed-filter-chip-bar-renderer>
+          <div class="feed-filter-chip-bar" id="feedChips">All Home Videos</div>
           <ytm-rich-item-renderer><a href="/watch?v=abc123">A related video</a></ytm-rich-item-renderer>
         </div></ytm-app></body></html>
         """, baseURL: URL(string: "https://m.youtube.com/watch?v=abc123")!)
@@ -428,16 +439,29 @@ final class AppShortVideoTests: XCTestCase {
         let display: (String) async throws -> String = { selector in
             try await web.evaluateJavaScript("getComputedStyle(document.querySelector('\(selector)')).display") as! String
         }
-        for selector in ["ytm-related-chip-cloud-renderer", ".related-chips-slot-wrapper",
-                         "#related-chips-sentinel", "#filter-chip-bar"] {
+        let visibleHeight: (String) async throws -> Double = { selector in
+            try await web.evaluateJavaScript("document.querySelector('\(selector)').getBoundingClientRect().height") as! Double
+        }
+        for selector in ["ytm-related-chip-cloud-renderer", "ytm-feed-filter-chip-bar-renderer",
+                         ".feed-filter-chip-bar"] {
             let value = try await display(selector)
             XCTAssertEqual(value, "none", "\(selector) must disappear with the app shell")
+        }
+        for selector in [".related-chips-slot-wrapper", "#related-chips-sentinel", "#filter-chip-bar"] {
+            let value = try await display(selector)
+            XCTAssertNotEqual(value, "none", "\(selector) is a layout slot, not a chip bar, and must stay")
+        }
+        for selector in ["#metadata", "#likes", "#comments"] {
+            let value = try await display(selector)
+            XCTAssertNotEqual(value, "none", "\(selector) must stay visible on a watch page")
+            let height = try await visibleHeight(selector)
+            XCTAssertGreaterThan(height, 0, "\(selector) must keep its layout height")
         }
         let card = try await display("ytm-rich-item-renderer")
         XCTAssertNotEqual(card, "none", "a related video must remain visible")
         _ = try await web.evaluateJavaScript("window.__clearviewApps.update({site:'youtube',appShell:false,active:true});true")
-        for selector in ["ytm-related-chip-cloud-renderer", ".related-chips-slot-wrapper",
-                         "#related-chips-sentinel", "#filter-chip-bar"] {
+        for selector in ["ytm-related-chip-cloud-renderer", "ytm-feed-filter-chip-bar-renderer",
+                         ".feed-filter-chip-bar"] {
             let value = try await display(selector)
             XCTAssertNotEqual(value, "none", "\(selector) must return when the app shell is disabled")
         }

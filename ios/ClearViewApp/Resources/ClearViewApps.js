@@ -111,11 +111,10 @@
     html[data-cv-app-shell="true"] ytm-mobile-topbar-renderer-v2,
     html[data-cv-app-shell="true"] ytm-feed-filter-chip-bar-renderer,
     html[data-cv-app-shell="true"] .feed-filter-chip-bar,
-    html[data-cv-app-shell="true"] ytm-related-chip-cloud-renderer,
-    html[data-cv-app-shell="true"] ytm-chip-cloud-renderer.chip-bar,
-    html[data-cv-app-shell="true"] .related-chips-slot-wrapper,
-    html[data-cv-app-shell="true"] #related-chips-sentinel,
-    html[data-cv-app-shell="true"] #filter-chip-bar,
+    /* Hide the chip renderers themselves, never a layout wrapper that may also
+       contain the watch page's title, action bar, or comments. */
+    html[data-cv-app-shell="true"] ytm-related-chip-cloud-renderer:not(:has(ytm-slim-video-metadata-renderer,ytm-slim-video-metadata-section-renderer,ytm-slim-video-action-bar-renderer,ytm-comments-section-renderer)),
+    html[data-cv-app-shell="true"] ytm-chip-cloud-renderer.chip-bar:not(:has(ytm-slim-video-metadata-renderer,ytm-slim-video-metadata-section-renderer,ytm-slim-video-action-bar-renderer,ytm-comments-section-renderer)),
     html[data-cv-app-shell="true"] ytd-masthead,
     html[data-cv-app-shell="true"] #masthead-container { display:none!important; }
     html[data-cv-app-shell="true"] ytm-app {
