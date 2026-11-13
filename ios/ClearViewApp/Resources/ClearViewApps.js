@@ -8,7 +8,7 @@
   const isFacebook = host === 'facebook.com' || host.endsWith('.facebook.com');
   const isGoogle = /^(?:www\.|m\.)?google\.[a-z]{2,}(?:\.[a-z]{2,})?$/.test(host);
   const isService = isYouTube || isInstagram || isSnapchat || isFacebook;
-  // All four are presented with ClearView's native header and bottom navigation.
+  // Services use ClearView’s header; Facebook keeps its own navigation row.
   // Only YouTube and Instagram opt into ClearView's dark palette; Snapchat and
   // Facebook keep their own colours.
   const isAppShell = isService;
@@ -25,6 +25,8 @@
   const shortName = () => isYouTube ? 'Shorts' : isSnapchat ? 'Spotlight' : 'Reels';
   let running = false;
   let lastURL = '';
+  let lastBackground = '';
+  let lastChromeSweep = 0;
   let timer;
   let sequence = 0;
   let lastPageState = '';
@@ -113,6 +115,12 @@
     html[data-cv-app-shell="true"] ytm-rich-item-renderer { margin-inline:0!important; }
     html[data-cv-app-shell="true"] .media-item-thumbnail-container,
     html[data-cv-app-shell="true"] .video-thumbnail-container { border-radius:0!important; }
+    html[data-cv-hide-shorts="true"] [data-cv-facebook-tabs="true"] {
+      background:#fff!important;
+    }
+    html[data-cv-hide-shorts="true"] [data-cv-facebook-tabs="true"] > [role="tab"] {
+      margin-left:var(--cv-tab-left)!important;
+    }
     html[data-cv-hide-shorts="true"] [data-cv-short-nav="true"],
     html[data-cv-hide-shorts="true"] [data-cv-short-shelf="true"],
     html[data-cv-hide-shorts="true"] ytm-pivot-bar-item-renderer:has([aria-label="Shorts"]),
@@ -158,6 +166,7 @@
   function route() {
     if (lastURL !== location.href) {
       lastURL = location.href;
+      lastChromeSweep = 0;
       detailCover?.remove();
       detailCover = null;
       send({kind:'route'});
@@ -184,6 +193,23 @@
     } else if (cover) cover.remove();
   }
 
+  /// Report the page's real background so the native strip under the home
+  /// indicator blends into the page rather than looking like a second bar.
+  function reportBackground() {
+    if (!document.body) return;
+    const body = getComputedStyle(document.body).backgroundColor;
+    const root = getComputedStyle(document.documentElement).backgroundColor;
+    const transparent = value => !value || value === 'rgba(0, 0, 0, 0)' || value === 'transparent';
+    const value = !transparent(body) ? body : !transparent(root) ? root : (config.dark ? 'rgb(15, 21, 20)' : 'rgb(255, 255, 255)');
+    if (value === lastBackground) return;
+    lastBackground = value;
+    const match = value.match(/rgba?\(([^)]+)\)/);
+    if (!match) return;
+    const parts = match[1].split(',').map(part => parseFloat(part));
+    if (parts.length < 3 || parts.some(Number.isNaN)) return;
+    send({kind:'background', r:parts[0], g:parts[1], b:parts[2], a:parts[3] ?? 1});
+  }
+
   function markAppChrome() {
     if (!isAppShell || !config.appShell) return;
     const selector = isYouTube
@@ -191,38 +217,86 @@
       : isSnapchat
         ? 'header,nav,[role="navigation"],[role="banner"],[data-testid="mobile-nav-top"],[class*="MobileNavigation_mobileNavContainer"],[class*="MobileHeader_headerWrapper"],[class*="MobileGhostIconCTABanner"]'
         : isFacebook
-          ? 'header,nav,[role="navigation"],[role="banner"],footer,[role="contentinfo"],[data-testid*="banner"],[data-testid*="upsell"]'
+          ? 'footer,[role="contentinfo"],[data-testid*="upsell"]'
           : 'nav,[role="navigation"],[role="banner"],footer,[role="contentinfo"]';
     document.querySelectorAll(selector).forEach(node => {
       if (!node.closest('article,form,[role="dialog"]')) node.setAttribute('data-cv-web-chrome', 'true');
     });
-    if (!isYouTube) document.querySelectorAll('header').forEach(node => {
+    if (!isYouTube && !isFacebook) document.querySelectorAll('header').forEach(node => {
       if (!node.closest('main,article,form,[role="dialog"]')) node.setAttribute('data-cv-web-chrome', 'true');
     });
+    if (isFacebook && !isAuthenticationPage()) {
+      // Keep Facebook's real navigation (friends, messages, notifications,
+      // marketplace). Only replace the wordmark/search/menu row with our header.
+      const now = Date.now();
+      if (now - lastChromeSweep > 1000) {
+        lastChromeSweep = now;
+        document.querySelectorAll('a[href], [aria-label^="Facebook" i], [role="banner"]').forEach(logo => {
+          if (logo.closest('article,[role="article"],form,[role="dialog"]')) return;
+          const label = (logo.getAttribute('aria-label') || logo.textContent || '').trim();
+          if (!/^facebook(?: logo)?$/i.test(label) && !logo.querySelector('svg[aria-label^="Facebook" i],img[alt^="Facebook" i]')) return;
+          let row = logo;
+          for (let depth = 0; row && depth < 5 && row !== document.body; depth++, row = row.parentElement) {
+            const rect = row.getBoundingClientRect();
+            if (rect.height > 100 || row.querySelector('article,[role="article"],form,[role="tablist"]')) break;
+            if (rect.width > innerWidth * 0.8 && rect.height >= 28) {
+              row.setAttribute('data-cv-web-chrome', 'true');
+              break;
+            }
+          }
+        });
+      }
+    }
   }
 
   /// Snapchat and Facebook put "open the app" / "download the app" prompts in the
   /// middle of their web pages. Those are website chrome, not content: mark them
   /// so the app-shell CSS removes them, including the text-only banners that have
   /// no stable class name.
+  function markAppPrompt(element) {
+    // Ascend before hiding the leaf, while its container still has geometry.
+    // Never remove a feed, login form, or modal to get rid of a small banner.
+    let candidate = element.closest('a,button,[role="button"]') || element;
+    for (let parent = candidate.parentElement, depth = 0;
+         parent && parent !== document.body && depth < 8; depth++, parent = parent.parentElement) {
+      if (parent.matches('main,article,[role="main"],[role="article"],[role="dialog"],form')
+          || parent.querySelector('article,[role="article"],form,input,textarea,video')) break;
+      const rect = parent.getBoundingClientRect();
+      if (rect.height > 160) break;
+      const position = getComputedStyle(parent).position;
+      if ((position === 'fixed' || position === 'sticky') && rect.width > innerWidth * 0.7) {
+        candidate = parent;
+        break;
+      }
+    }
+    candidate.setAttribute('data-cv-app-prompt', 'true');
+  }
+
   function hideAppPrompts() {
     if (!isSnapchat && !isFacebook) return;
     if (!document.body) return;
-    document.querySelectorAll('[data-cv-app-prompt="true"]').forEach(node => node.removeAttribute('data-cv-app-prompt'));
-    let selector = 'a[href*="apps.apple.com"],a[href*="itunes.apple.com"],a[href*="play.google.com/store/apps"],a[href^="snapchat://"],a[href^="fb://"]';
+    // Keep previously identified containers marked: their hidden children no
+    // longer have measurable geometry on subsequent scans.
+    let selector = 'a[href*="apps.apple.com"],a[href*="itunes.apple.com"],a[href*="play.google.com/store/apps"],a[href^="snapchat://"],a[href^="fb://"],'
+      + '[data-testid*="open-app" i],[data-testid*="app-download" i],[data-testid*="appDownload"],[data-testid*="app-promo" i],'
+      + '[data-sigil*="app-download" i],[data-sigil*="download-banner" i],[class*="appDownload"],[class*="AppDownload"]';
     if (isSnapchat) {
       selector += ',a[href*="click.snapchat.com"],a[href*="link.snapchat.com"],a[href*="snapchat.com/download"],'
         + '[class*="MobileGhostIconCTABanner"],[class*="MobileHeader_headerWrapper"],[class*="MobileHeader_mobileInstallButton"],'
         + '[class*="HomepageContent_mobileDownloadSnapchat"],[class*="HomepageContent_landingScreen"],'
         + '[class*="HomepageContent_heroContent"],[data-testid="ConsumerNav_DownloadButton"]';
     }
-    document.querySelectorAll(selector).forEach(node => node.setAttribute('data-cv-app-prompt', 'true'));
+    document.querySelectorAll(selector).forEach(node => {
+      markAppPrompt(node);
+    });
     const patterns = isSnapchat
       ? [/^open snapchat$/i, /^install$/i, /^download$/i, /^download snapchat$/i,
          /^download to try the most popular/i, /^open in app$/i,
          /^snapchat is better on the app$/i, /^snapchat app$/i, /^open in snapchat$/i,
          /^browser continue$/i]
-      : [/^get facebook for ios and browse faster\.?$/i, /^open in app$/i];
+      : [/^get facebook for ios and browse faster\.?$/i, /^open in app$/i, /^open app$/i,
+         /^open in facebook$/i, /^open facebook$/i, /^open the app$/i, /^open in the app$/i,
+         /^continue in app$/i, /^use the app$/i, /^get the app$/i, /^download the app$/i];
     const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
     let node;
     while ((node = walker.nextNode())) {
@@ -232,14 +306,22 @@
       for (let depth = 0; element && depth < 5; depth++, element = element.parentElement) {
         const tag = element.tagName.toLowerCase();
         if (tag === 'a' || tag === 'button' || element.getAttribute('role') === 'button' || tag === 'header') {
-          element.setAttribute('data-cv-app-prompt', 'true');
+          markAppPrompt(element);
           break;
         }
         if (depth >= 2 && element.textContent.trim().length <= 200) {
-          element.setAttribute('data-cv-app-prompt', 'true');
+          markAppPrompt(element);
           break;
         }
       }
+    }
+    // Catch icon-only app launch controls too. Facebook can leave their
+    // blue button visible after an app-store link or text child is removed.
+    if (isFacebook && !isAuthenticationPage()) {
+      document.querySelectorAll('a,button,[role="button"]').forEach(control => {
+        const label = control.getAttribute('aria-label') || control.getAttribute('title') || '';
+        if (/^(?:open|use|continue in|download|get|install)(?: the)? (?:facebook|app)/i.test(label)) markAppPrompt(control);
+      });
     }
     if (isFacebook) {
       // The login page's footer is plain links with no landmark role. Remove the
@@ -262,8 +344,22 @@
   function shortControl(element) {
     const href = element.getAttribute('href') || element.getAttribute('data-href');
     if (href && shortPath(href)) return true;
+    // Facebook's top video tab is labelled Watch/Videos and uses /watch,
+    // /video or a tab query instead of /reels. Hide that entry when Reels are
+    // disabled, while leaving ordinary video links inside posts intact.
+    if (isFacebook && !element.closest('article,[role="article"],form,[role="dialog"]')) {
+      try {
+        const url = new URL(href || '', location.href);
+        if ((url.hostname === domain || url.hostname.endsWith('.' + domain))
+            && (/^\/(?:watch|videos?)\/?$/.test(url.pathname)
+              || /^(?:watch|videos?|reels)$/.test(url.searchParams.get('tab') || ''))) return true;
+      } catch (_) { /* A control without a URL can still carry an accessible label. */ }
+      const labels = [element, ...element.querySelectorAll('[aria-label],[title],img[alt]')]
+        .map(node => node.getAttribute('aria-label') || node.getAttribute('title') || node.getAttribute('alt') || '').join(' ');
+      if (/^(?:reels|watch|videos?)(?=[\s,.:;!?]|$)/i.test(labels.trim())) return true;
+    }
     const label = element.getAttribute('aria-label') || element.getAttribute('title') || '';
-    if (/^(?:shorts|reels|spotlight)(?:\s|$)/i.test(label.trim())) return true;
+    if (/^(?:shorts|reels|spotlight)(?=[\s,.:;!?]|$)/i.test(label.trim())) return true;
     const tab = element.getAttribute('tab-identifier') || element.getAttribute('data-tab-identifier') || '';
     if (/(?:shorts|reels|spotlight)/i.test(tab)) return true;
     return /^(?:shorts|reels|spotlight)$/i.test((element.textContent || '').trim());
@@ -275,12 +371,40 @@
     // contain buttons and Instagram also uses role=button controls.
     document.querySelectorAll('[data-cv-short-nav]').forEach(node => node.removeAttribute('data-cv-short-nav'));
     document.querySelectorAll('[data-cv-short-shelf]').forEach(node => node.removeAttribute('data-cv-short-shelf'));
-    const selector = 'a[href],button[aria-label],button[title],[role="button"][aria-label],[role="link"],[role="tab"],ytm-pivot-bar-item-renderer,ytm-pivot-bar-item-view-model,[tab-identifier],[data-tab-identifier]';
+    const selector = 'a[href],button[aria-label],button[title],[role="button"],[aria-label="Reels" i],[role="link"],[role="tab"],ytm-pivot-bar-item-renderer,ytm-pivot-bar-item-view-model,[tab-identifier],[data-tab-identifier]';
     document.querySelectorAll(selector).forEach(element => {
       if (!shortControl(element)) return;
-      const item = element.closest('ytm-pivot-bar-item-renderer,ytm-pivot-bar-item-view-model,[role="tab"],[role="menuitem"]');
-      (item || element).setAttribute('data-cv-short-nav', 'true');
+      let item = element.closest('ytm-pivot-bar-item-renderer,ytm-pivot-bar-item-view-model,[role="tab"],[role="menuitem"]') || element;
+      if (isFacebook && !element.closest('article,[role="article"],form,[role="dialog"]')) {
+        // Facebook wraps each icon button in a separate painted tab cell.
+        // Remove the cell as well, rather than leaving its grey background.
+        for (let parent = item.parentElement, depth = 0; parent && depth < 5; depth++, parent = parent.parentElement) {
+          const rect = parent.getBoundingClientRect();
+          if (rect.width < 16 || rect.width > innerWidth * 0.28 || rect.height > 88
+              || parent.matches('nav,header,[role="navigation"],[role="tablist"]')
+              || parent.querySelectorAll('a[href],button,[role="button"],[role="tab"]').length > 1) break;
+          item = parent;
+        }
+      }
+      item.setAttribute('data-cv-short-nav', 'true');
     });
+    if (isFacebook) {
+      // Facebook's mobile renderer overlaps each 50px tab with a negative top
+      // margin. Keep that vertical layout and only redistribute horizontal slots.
+      document.querySelectorAll('[role="tablist"]').forEach(row => {
+        const tabs = Array.from(row.children);
+        if (tabs.length < 3 || !tabs.every(tab => tab.matches('[role="tab"]'))
+            || !tabs.some(tab => tab.hasAttribute('data-cv-short-nav'))) return;
+        row.setAttribute('data-cv-facebook-tabs', 'true');
+        const visible = tabs.filter(tab => !tab.hasAttribute('data-cv-short-nav'));
+        const step = row.getBoundingClientRect().width / visible.length;
+        if (!Number.isFinite(step) || step <= 0) return;
+        visible.forEach((tab, index) => {
+          const left = index * step + (step - tab.getBoundingClientRect().width) / 2;
+          tab.style.setProperty('--cv-tab-left', left + 'px');
+        });
+      });
+    }
     if (isYouTube) {
       // Newer shelves can use a rich-section wrapper instead of reel-shelf.
       // Remove the whole shelf, including its heading and layout space.
@@ -397,6 +521,7 @@
     route();
     markAppChrome();
     hideAppPrompts();
+    reportBackground();
     hideShortLinks();
     filterGoogleCategories();
     skipVideoAds();
@@ -535,6 +660,14 @@
       schedule();
     },
     resolve,
+    openSiteMenu() {
+      if (!isFacebook) return false;
+      const control = document.querySelector('[aria-label="Facebook Menu" i]');
+      const button = control?.closest('a,button,[role="button"]') || control;
+      if (!button) return false;
+      button.click();
+      return true;
+    },
     openProfile() {
       const direct = document.querySelector('nav [aria-label="Profile"],[role="navigation"] [aria-label="Profile"],[data-cv-web-chrome] [aria-label="Profile"]');
       const control = direct?.closest('a,button,[role="button"]');

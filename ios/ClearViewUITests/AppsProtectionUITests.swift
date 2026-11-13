@@ -76,12 +76,13 @@ final class AppsProtectionUITests: XCTestCase {
         XCTAssertTrue(app.buttons["apps.filters"].waitForExistence(timeout: 30), "\(name) should open the protected browser")
 
         // It should look like an app: the branded title, no website address, and
-        // the native tabs instead of the browser toolbar.
+        // no duplicate bottom bar over the branded site's own navigation.
         let appTitle = app.staticTexts["browser.title"]
         XCTAssertTrue(appTitle.waitForExistence(timeout: 10))
         XCTAssertEqual(appTitle.label, expectedTitle)
         XCTAssertFalse(app.staticTexts["browser.host"].exists, "the website address must not be shown")
-        XCTAssertTrue(app.buttons["apps.navigation.home"].exists, "the native Home tab should be shown")
+        XCTAssertFalse(app.buttons["apps.navigation.home"].exists,
+                       "the redundant bottom bar should not cover the page")
         XCTAssertFalse(app.buttons["apps.navigation.shortVideos"].exists,
                        "the blocked short-video tab should be gone")
 

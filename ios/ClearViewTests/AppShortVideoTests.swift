@@ -1,4 +1,5 @@
 import XCTest
+import WebKit
 @testable import ClearView
 
 /// Short-form blocking for the four apps that have a vertical feed.
@@ -250,4 +251,61 @@ final class AppShortVideoTests: XCTestCase {
         XCTAssertTrue(AppSite.web.owns(url("https://www.facebook.com/reels/")))
         XCTAssertTrue(AppSite.google.owns(url("https://example.com/")))
     }
+    func testFacebookChromeAndReelsToggleInWebKit() async throws {
+        let web = WKWebView(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+        web.loadHTMLString("""
+        <html><head><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+        <body style="margin:0">
+          <header><div id="wordmark" style="height:48px;display:flex"><div role="button" aria-label="Facebook logo"><svg width="110" height="30"></svg></div><button>Search</button><button aria-label="Facebook Menu" onclick="window.menuOpened=true">Menu</button></div>
+          <nav id="tabs" style="height:48px"><a id="friends" href="/friends/">Friends</a><a id="watch" href="/watch/?ref=tab">Video</a><a id="reels" href="/reels/">Reels</a><button id="icon" aria-label="Videos">Icon</button><div id="reelsSlot" style="width:65px;height:48px;background:grey"><div role="button" id="countedReels" aria-label="reels, 100 new, 4 of 6"><svg width="24" height="24"></svg></div></div></nav></header>
+          <div id="fixedTabs" role="tablist" style="height:50px;width:390px;background:grey">
+            <div role="tab" id="feedTab" aria-label="feed, 1 of 6" style="height:50px;width:65px">Home</div>
+            <div role="tab" id="friendsTab" aria-label="friends, 2 of 6" style="height:50px;width:65px;margin-top:-50px;margin-left:65px">Friends</div>
+            <div role="tab" id="messagesTab" aria-label="messages, 3 of 6" style="height:50px;width:65px;margin-top:-50px;margin-left:130px">Messages</div>
+            <div role="tab" id="fixedReels" aria-label="reels, 100 new, 4 of 6" style="height:50px;width:65px;margin-top:-50px;margin-left:195px">Reels</div>
+            <div role="tab" id="notificationsTab" aria-label="notifications, 5 of 6" style="height:50px;width:65px;margin-top:-50px;margin-left:260px">Notifications</div>
+            <div role="tab" id="marketplaceTab" aria-label="marketplace, 6 of 6" style="height:50px;width:65px;margin-top:-50px;margin-left:325px">Marketplace</div>
+          </div>
+          <article id="post"><p>A normal post</p><a id="postVideo" href="/watch/?v=123">Watch video</a></article>
+          <div id="promo" style="position:fixed;bottom:0;width:100%;height:80px;background:white"><button style="background:blue;width:100%;height:44px"><span><a href="https://apps.apple.com/app/facebook/id284882215">Open app</a></span></button></div>
+        </body></html>
+        """, baseURL: URL(string: "https://m.facebook.com/"))
+        for _ in 0..<100 {
+            if !web.isLoading { break }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        let scriptURL = try XCTUnwrap(Bundle(for: AppBrowserSession.self).url(forResource: "ClearViewApps", withExtension: "js"))
+        let source = try String(contentsOf: scriptURL, encoding: .utf8)
+        _ = try await web.evaluateJavaScript("""
+        var clearViewInitial = {site:'facebook',appShell:true,active:true,blockFacebookReels:true};
+        \(source)
+        window.__clearviewApps.update(clearViewInitial);
+        true;
+        """)
+        let hidden: (String) async throws -> Bool = { id in
+            try await web.evaluateJavaScript("getComputedStyle(document.getElementById('\(id)')).display === 'none'") as! Bool
+        }
+        for id in ["wordmark", "promo", "watch", "reels", "icon", "reelsSlot", "fixedReels"] {
+            let result = try await hidden(id)
+            XCTAssertTrue(result, "\(id) should disappear")
+        }
+        for id in ["tabs", "friends", "post", "postVideo"] {
+            let result = try await hidden(id)
+            XCTAssertFalse(result, "\(id) must remain available")
+        }
+        let rowFlows = try await web.evaluateJavaScript("getComputedStyle(document.getElementById('notificationsTab')).marginLeft === '240.5px' && getComputedStyle(document.getElementById('notificationsTab')).marginTop === '-50px'") as? Bool
+        XCTAssertEqual(rowFlows, true, "fixed-position tabs must close the gap left by Reels")
+        _ = try await web.evaluateJavaScript("clearViewInitial.blockFacebookReels=false;window.__clearviewApps.update(clearViewInitial);true")
+        for id in ["watch", "reels", "icon", "reelsSlot", "fixedReels"] {
+            let result = try await hidden(id)
+            XCTAssertFalse(result, "\(id) must return when blocking is disabled")
+        }
+        let restoredMargin = try await web.evaluateJavaScript("getComputedStyle(document.getElementById('notificationsTab')).marginLeft") as? String
+        XCTAssertEqual(restoredMargin, "260px", "disabling blocking must restore the site's layout")
+        let menuOpened = try await web.evaluateJavaScript("window.__clearviewApps.openSiteMenu() && window.menuOpened === true") as? Bool
+        XCTAssertEqual(menuOpened, true, "Facebook's menu must stay available through the native header")
+        let promoStillHidden = try await hidden("promo")
+        XCTAssertTrue(promoStillHidden, "repeat scans must not leave the promo background behind")
+    }
+
 }

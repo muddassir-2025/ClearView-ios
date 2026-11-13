@@ -20,6 +20,9 @@ final class AppBrowserSession: NSObject, WKNavigationDelegate, WKUIDelegate {
     var showsIntentHome = false
     var navigationHidden = false
     var protectionNotice: String?
+    /// The page's own background, so the home-indicator strip blends into the
+    /// page instead of showing a second bar under it.
+    var pageBackground = UIColor.cvBackground
 
     @ObservationIgnored private weak var library: AppsLibrary?
     @ObservationIgnored private(set) var webView: WKWebView!
@@ -66,7 +69,7 @@ final class AppBrowserSession: NSObject, WKNavigationDelegate, WKUIDelegate {
         webView.isOpaque = false
         webView.backgroundColor = .cvBackground
         webView.scrollView.backgroundColor = .cvBackground
-        webView.scrollView.contentInsetAdjustmentBehavior = .never
+        webView.scrollView.contentInsetAdjustmentBehavior = site.usesBrandedHeader ? .automatic : .never
         webView.scrollView.keyboardDismissMode = .interactive
         webView.accessibilityIdentifier = "apps.browser.\(site.rawValue)"
         observations = [
@@ -249,6 +252,16 @@ final class AppBrowserSession: NSObject, WKNavigationDelegate, WKUIDelegate {
         }
     }
 
+    func openFacebookMenu() {
+        guard site == .facebook else { return }
+        webView.callAsyncJavaScript("return window.__clearviewApps?.openSiteMenu() ?? false", arguments: [:],
+            in: nil, in: .defaultClient) { [weak self] result in
+                guard let self, self.active else { return }
+                if case .success(let value) = result, value as? Bool == true { return }
+                self.load(self.site.home.appendingPathComponent("bookmarks/"))
+            }
+    }
+
     func openInbox() { load(site.home.appendingPathComponent("direct/inbox/")) }
     func goSearch() {
         guard let url = webView.url, site.owns(url) else { load(site.search); return }
@@ -321,6 +334,10 @@ final class AppBrowserSession: NSObject, WKNavigationDelegate, WKUIDelegate {
         guard active, message.frameInfo.isMainFrame,
               let url = message.frameInfo.request.url, site.owns(url),
               let body = message.body as? [String: Any], let kind = body["kind"] as? String else { return }
+        if kind == "background" {
+            updatePageBackground(body)
+            return
+        }
         if kind == "whitespaceTap" {
             guard body["url"] as? String == webView.url?.absoluteString,
                   !site.isAuthenticationPage(webView.url ?? site.home), blockedPage == nil else { return }
@@ -380,6 +397,20 @@ final class AppBrowserSession: NSObject, WKNavigationDelegate, WKUIDelegate {
         }
         if !activity.isEmpty { protection.noteHidden(activity) }
         invoke("window.__clearviewApps?.resolve(items, document)", arguments: ["items": replies, "document": document])
+    }
+
+    private func updatePageBackground(_ body: [String: Any]) {
+        guard let red = (body["r"] as? NSNumber)?.doubleValue,
+              let green = (body["g"] as? NSNumber)?.doubleValue,
+              let blue = (body["b"] as? NSNumber)?.doubleValue else { return }
+        let alpha = (body["a"] as? NSNumber)?.doubleValue ?? 1
+        let color = UIColor(red: red / 255, green: green / 255, blue: blue / 255,
+                            alpha: max(0, min(1, alpha)))
+        guard color != pageBackground else { return }
+        pageBackground = color
+        webView.backgroundColor = color
+        webView.scrollView.backgroundColor = color
+        webView.underPageBackgroundColor = color
     }
 
     func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction,

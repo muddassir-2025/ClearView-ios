@@ -53,10 +53,12 @@ struct AppBrowserView: View {
                     }.frame(maxWidth: .infinity, maxHeight: .infinity).background(Color.cvBackground)
                 }
             }
-            if session.showsAppNavigation && !session.navigationHidden {
+            if showsBottomNavigation {
                 if session.site.usesAppShell { navigationBar } else { browserToolbar }
             }
-        }.overlay(alignment: .bottomTrailing) {
+        }
+        .ignoresSafeArea(.container, edges: bottomSafeAreaEdges)
+        .overlay(alignment: .bottomTrailing) {
             if session.navigationHidden {
                 Button { withAnimation(.easeInOut(duration: 0.18)) { session.navigationHidden = false } } label: {
                     Image(systemName: "chevron.up").font(.system(size: 15, weight: .semibold))
@@ -69,8 +71,19 @@ struct AppBrowserView: View {
     }
 
     private var configuredBrowser: some View {
+        browserLifecycle
+        .sheet(isPresented: $showFilters, onDismiss: { session.applyPreferences() }) {
+            BrowserProtectionSettingsView(library: library)
+        }
+        .sheet(isPresented: $showSearch) {
+            AppSearchSheet(site: session.site) { session.search($0) }
+        }
+    }
+
+    private var browserLifecycle: some View {
         browserLayout
-        .background(Color.cvBackground).tint(.cvPrimary)
+        .background(Color(uiColor: session.pageBackground)).tint(.cvPrimary)
+        .preferredColorScheme(session.site == .facebook ? .light : nil)
         .task { session.resume(dark: colorScheme == .dark) }
         .task(id: session.filterSignature) { session.applyPreferences() }
         .onChange(of: scenePhase) { _, phase in
@@ -82,12 +95,6 @@ struct AppBrowserView: View {
             if expired { session.pause(); dismiss() }
         }
         .onDisappear { session.pause() }
-        .sheet(isPresented: $showFilters, onDismiss: { session.applyPreferences() }) {
-            BrowserProtectionSettingsView(library: library)
-        }
-        .sheet(isPresented: $showSearch) {
-            AppSearchSheet(site: session.site) { session.search($0) }
-        }
     }
 
     private var browserWithAlerts: some View {
@@ -108,6 +115,9 @@ struct AppBrowserView: View {
             Text("Sign in using \(session.site.name)’s own page. Some providers, including Google, restrict embedded browser sign-in. If the provider refuses, you can browse publicly here or use Safari. Safari’s login session won’t transfer into ClearView.")
         }
     }
+
+    private var facebookHeader: Bool { session.site == .facebook }
+    private var headerForeground: Color { facebookHeader ? .black : .cvOnSurface }
 
     private var header: some View {
         HStack(spacing: 2) {
@@ -134,9 +144,22 @@ struct AppBrowserView: View {
             }
             Button { showFilters = true } label: {
                 Image(systemName: session.blocksShortVideos ? "shield.lefthalf.filled" : "checkmark.shield")
-                    .font(.system(size: 21)).foregroundStyle(Color.cvPrimary).frame(width: 40, height: 44)
+                    .font(.system(size: 21)).foregroundStyle(facebookHeader ? Color.blue : Color.cvPrimary).frame(width: 40, height: 44)
             }.accessibilityLabel("Filters, \(session.hiddenCount) items hidden this session").accessibilityIdentifier("apps.filters")
             Menu {
+                if session.showsAppNavigation && session.site.usesBrandedHeader {
+                    Section("Go to") {
+                        ForEach(visibleDestinations) { destination in
+                            Button { session.navigate(destination) } label: {
+                                Label(destination.title(for: session.site),
+                                      systemImage: destination.symbol(selected: false))
+                            }
+                        }
+                    }
+                }
+                if session.site == .facebook && session.showsAppNavigation {
+                    Button("Facebook menu", systemImage: "line.3.horizontal") { session.openFacebookMenu() }
+                }
                 if session.canGoBack { Button("Back", systemImage: "chevron.left") { session.goBack() } }
                 Button("Reload", systemImage: "arrow.clockwise") { session.reload() }
                 Button("Protection settings", systemImage: "slider.horizontal.3") { showFilters = true }
@@ -150,7 +173,20 @@ struct AppBrowserView: View {
                 }
             } label: { Image(systemName: "ellipsis").font(.system(size: 19, weight: .semibold)).frame(width: 36, height: 44) }
                 .accessibilityLabel("App menu")
-        }.padding(.horizontal, 6).padding(.vertical, 2).foregroundStyle(Color.cvOnSurface)
+        }.padding(.horizontal, 6).padding(.vertical, 2).foregroundStyle(headerForeground)
+            .background(facebookHeader ? Color.white : Color.cvBackground)
+            .overlay(alignment: .bottom) { Color.cvOutlineVariant.opacity(0.3).frame(height: 0.5) }
+    }
+
+    /// Facebook and Snapchat are branded web apps whose own pages already carry
+    /// navigation. A second bottom bar only covers their content, so their
+    /// destinations live in the header menu instead.
+    private var bottomSafeAreaEdges: Edge.Set {
+        session.site.usesBrandedHeader ? .bottom : Edge.Set()
+    }
+
+    private var showsBottomNavigation: Bool {
+        session.showsAppNavigation && !session.navigationHidden && !session.site.usesBrandedHeader
     }
 
     private var showsBackButton: Bool {
@@ -195,7 +231,9 @@ struct AppBrowserView: View {
                 switch session.site {
                 case .youtube:
                     Image(systemName: "play.rectangle.fill").font(.system(size: 25)).foregroundStyle(.red)
-                case .snapchat, .facebook:
+                case .facebook:
+                    EmptyView()
+                case .snapchat:
                     AppBrandMark(site: session.site, size: 25)
                 case .google, .instagram, .web:
                     EmptyView()
@@ -204,6 +242,7 @@ struct AppBrowserView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(session.showsAppNavigation ? (session.site.usesAppShell ? session.site.name : "ClearView") : "Sign in")
                     .font(.system(size: 21, weight: .bold, design: .rounded)).tracking(-0.7)
+                    .foregroundStyle(facebookHeader ? Color.blue : headerForeground)
                     .accessibilityIdentifier("browser.title")
                 // A branded app never shows its website address. Google and custom
                 // websites keep the host so the person knows where they are.
