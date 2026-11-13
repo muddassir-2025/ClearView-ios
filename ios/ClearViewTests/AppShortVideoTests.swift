@@ -308,4 +308,48 @@ final class AppShortVideoTests: XCTestCase {
         XCTAssertTrue(promoStillHidden, "repeat scans must not leave the promo background behind")
     }
 
+    func testYouTubeHeaderSpacingAndFullscreenPreserveCaptionLayer() async throws {
+        let web = WKWebView(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+        web.loadHTMLString("""
+        <html><head><meta name="viewport" content="width=device-width,initial-scale=1">
+        <style>body{margin:0}ytm-app{display:block;border-top:50px solid transparent}
+        #player{position:relative;width:390px;height:220px;padding-bottom:56.25%;background:black}
+        .captions{position:absolute;bottom:20px;left:20px;color:white}</style></head>
+        <body><ytm-app><div style="height:50px"></div><div class="page-container"><div id="player" class="html5-video-player">
+        <div class="html5-video-container"><video playsinline></video></div>
+        <div class="captions">A caption above the video</div>
+        <button class="ytp-fullscreen-button" aria-label="Full screen" onclick="window.videoOnlyFullscreen=true">Full screen</button>
+        </div></div></ytm-app></body></html>
+        """, baseURL: URL(string: "https://m.youtube.com/"))
+        for _ in 0..<100 {
+            if !web.isLoading { break }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        let scriptURL = try XCTUnwrap(Bundle(for: AppBrowserSession.self).url(forResource: "ClearViewApps", withExtension: "js"))
+        let source = try String(contentsOf: scriptURL, encoding: .utf8)
+        _ = try await web.evaluateJavaScript("""
+        var clearViewInitial={site:'youtube',appShell:true,active:true};
+        \(source)
+        window.__clearviewApps.update(clearViewInitial);
+        true;
+        """)
+        _ = try await web.evaluateJavaScript("window.__clearviewApps.update(clearViewInitial);true")
+        let feedTop = try await web.evaluateJavaScript("document.querySelector('.page-container').getBoundingClientRect().top") as! Double
+        XCTAssertEqual(feedTop, 0, accuracy: 0.5, "the hidden masthead must leave no reserved space after repeated scans")
+        _ = try await web.evaluateJavaScript("window.playerInlineHeight=document.getElementById('player').getBoundingClientRect().height;window.__clearviewApps.updateViewport(390,500);document.querySelector('.ytp-fullscreen-button').click();true")
+        let expanded = try await web.evaluateJavaScript("""
+        (()=>{const p=document.getElementById('player').getBoundingClientRect();
+        const c=document.querySelector('.captions').getBoundingClientRect();
+        return p.width===390 && p.height===500 && c.top>=p.top && c.bottom<=p.bottom
+          && !window.videoOnlyFullscreen && !!document.getElementById('clearview-exit-fullscreen');})()
+        """) as? Bool
+        XCTAssertEqual(expanded, true, "fullscreen must include the HTML captions and intercept video-only fullscreen")
+        _ = try await web.evaluateJavaScript("document.getElementById('clearview-exit-fullscreen').click();true")
+        let restored = try await web.evaluateJavaScript("!document.documentElement.hasAttribute('data-cv-player-fullscreen') && document.getElementById('player').getBoundingClientRect().height===window.playerInlineHeight") as? Bool
+        XCTAssertEqual(restored, true)
+        _ = try await web.evaluateJavaScript("document.querySelector('.ytp-fullscreen-button').click();window.__clearviewApps.pause();true")
+        let paused = try await web.evaluateJavaScript("!document.getElementById('clearview-exit-fullscreen')") as? Bool
+        XCTAssertEqual(paused, true, "leaving the app must exit the expanded player")
+    }
+
 }

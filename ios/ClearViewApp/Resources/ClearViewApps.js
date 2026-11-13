@@ -108,9 +108,39 @@
     html[data-cv-app-shell="true"] ytd-masthead,
     html[data-cv-app-shell="true"] #masthead-container { display:none!important; }
     html[data-cv-app-shell="true"] ytm-app {
-      padding-top:0!important;padding-bottom:0!important;margin-top:0!important;
+      padding-top:0!important;padding-bottom:0!important;margin-top:0!important;border-top:0!important;
       --ytm-pivot-bar-height:0px;--mobile-topbar-height:0px;
       --default-mobile-topbar-height:0px;--default-ytd-masthead-height:0px;
+    }
+    html[data-cv-app-shell="true"][data-cv-youtube-home="true"] ytm-app > .page-container {
+      margin-top:calc(-1 * var(--cv-youtube-home-gap,0px))!important;
+    }
+    html[data-cv-player-fullscreen="true"], html[data-cv-player-fullscreen="true"] body { overflow:hidden!important; }
+    html[data-cv-player-fullscreen="true"] [data-cv-fullscreen-player="true"] {
+      position:fixed!important;inset:0!important;width:var(--cv-player-width,100vw)!important;height:var(--cv-player-height,100dvh)!important;
+      min-width:0!important;min-height:0!important;max-width:none!important;max-height:none!important;
+      margin:0!important;padding:0!important;box-sizing:border-box!important;transform:none!important;
+      z-index:2147483646!important;background:#000!important;
+    }
+    [data-cv-fullscreen-player="true"] #player,
+    [data-cv-fullscreen-player="true"] .html5-video-player,
+    [data-cv-fullscreen-player="true"] .html5-video-container,
+    [data-cv-fullscreen-player="true"] #player-control-container,
+    [data-cv-fullscreen-player="true"] #player-control-overlay {
+      position:absolute!important;inset:0!important;width:100%!important;height:100%!important;
+      min-height:0!important;max-height:none!important;margin:0!important;padding:0!important;box-sizing:border-box!important;transform:none!important;
+    }
+    [data-cv-fullscreen-player="true"] .ytp-caption-window-container {
+      width:100%!important;height:100%!important;z-index:30!important;
+    }
+    [data-cv-fullscreen-player="true"] .caption-window { top:auto!important;bottom:12%!important; }
+    [data-cv-fullscreen-player="true"] video {
+      width:100%!important;height:100%!important;left:0!important;top:0!important;object-fit:contain!important;
+    }
+    #clearview-exit-fullscreen {
+      position:absolute;top:max(12px,env(safe-area-inset-top));right:max(12px,env(safe-area-inset-right));
+      z-index:2147483647;width:60px;height:44px;border:0;border-radius:50%;background:rgba(0,0,0,.65);
+      color:#fff;font:14px -apple-system,sans-serif;
     }
     html[data-cv-app-shell="true"] ytm-rich-item-renderer { margin-inline:0!important; }
     html[data-cv-app-shell="true"] .media-item-thumbnail-container,
@@ -154,6 +184,7 @@
   function mount() {
     if (!document.documentElement) return;
     if (!style.isConnected) (document.head || document.documentElement).append(style);
+    document.documentElement.dataset.cvYoutubeHome = String(isYouTube && location.pathname === '/');
     document.documentElement.dataset.cvDark = String(config.dark);
     document.documentElement.dataset.cvService = String(usesDarkPalette);
     document.documentElement.dataset.cvHideShorts = String(Boolean(shortSetting()));
@@ -163,8 +194,59 @@
     document.documentElement.dataset.cvBlockAds = String(isYouTube && config.blockAds);
   }
 
+  // YouTube renders captions in HTML above the video. iOS's video-only
+  // fullscreen drops that layer, so expand the complete player in this web view.
+  let fullscreenPlayer = null;
+  let fullscreenScroll = 0;
+  let exitFullscreenButton = null;
+  function setPlayerFullscreen(enabled, player) {
+    if (enabled && !fullscreenPlayer) {
+      if (!player?.querySelector('video')) return;
+      fullscreenScroll = window.scrollY;
+      fullscreenPlayer = player;
+      player.setAttribute('data-cv-fullscreen-player', 'true');
+      document.documentElement.setAttribute('data-cv-player-fullscreen', 'true');
+      exitFullscreenButton = document.createElement('button');
+      exitFullscreenButton.id = 'clearview-exit-fullscreen';
+      exitFullscreenButton.type = 'button';
+      exitFullscreenButton.textContent = 'Done';
+      exitFullscreenButton.setAttribute('aria-label', 'Exit full screen');
+      exitFullscreenButton.addEventListener('click', () => setPlayerFullscreen(false));
+      player.append(exitFullscreenButton);
+      send({kind:'playerFullscreen', enabled:true});
+    } else if (!enabled && fullscreenPlayer) {
+      fullscreenPlayer.removeAttribute('data-cv-fullscreen-player');
+      document.documentElement.removeAttribute('data-cv-player-fullscreen');
+      exitFullscreenButton?.remove();
+      exitFullscreenButton = null;
+      fullscreenPlayer = null;
+      send({kind:'playerFullscreen', enabled:false});
+      window.scrollTo(0, fullscreenScroll);
+    }
+  }
+  document.addEventListener('click', event => {
+    if (!isYouTube || !config.appShell || !running) return;
+    const control = event.target.closest?.('button,[role="button"]');
+    if (!control || control.id === 'clearview-exit-fullscreen') return;
+    const label = control.getAttribute('aria-label') || control.getAttribute('title') || '';
+    if (!control.matches('.ytp-fullscreen-button,.fullscreen-button')
+        && !/^(?:enter |exit )?full[ -]?screen(?:[ (]|$)/i.test(label)) return;
+    const player = control.closest('#player-container-id,#player,.html5-video-player') || document.querySelector('#player-container-id,#player');
+    if (!player?.querySelector('video')) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    setPlayerFullscreen(!fullscreenPlayer, player);
+  }, true);
+  document.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && fullscreenPlayer) {
+      event.preventDefault();
+      setPlayerFullscreen(false);
+    }
+  });
+
   function route() {
     if (lastURL !== location.href) {
+      setPlayerFullscreen(false);
       lastURL = location.href;
       lastChromeSweep = 0;
       detailCover?.remove();
@@ -225,6 +307,16 @@
     if (!isYouTube && !isFacebook) document.querySelectorAll('header').forEach(node => {
       if (!node.closest('main,article,form,[role="dialog"]')) node.setAttribute('data-cv-web-chrome', 'true');
     });
+    if (isYouTube && location.pathname === '/') {
+      const app = document.querySelector('ytm-app');
+      const page = app?.querySelector(':scope > .page-container');
+      if (page) {
+        const previous = parseFloat(page.style.getPropertyValue('--cv-youtube-home-gap')) || 0;
+        const gap = page.getBoundingClientRect().top - app.getBoundingClientRect().top + previous;
+        // Only consume a small empty masthead slot, never a player or feed card.
+        if (gap >= 0 && gap <= 80) page.style.setProperty('--cv-youtube-home-gap', gap + 'px');
+      }
+    }
     if (isFacebook && !isAuthenticationPage()) {
       // Keep Facebook's real navigation (friends, messages, notifications,
       // marketplace). Only replace the wordmark/search/menu row with our header.
@@ -517,6 +609,7 @@
   function scan() {
     timer = undefined;
     if (!running || !document.body) return;
+    if (fullscreenPlayer && !fullscreenPlayer.isConnected) setPlayerFullscreen(false);
     mount();
     route();
     markAppChrome();
@@ -660,6 +753,12 @@
       schedule();
     },
     resolve,
+    updateViewport(width, height) {
+      if (width > 0 && height > 0) {
+        document.documentElement.style.setProperty('--cv-player-width', width + 'px');
+        document.documentElement.style.setProperty('--cv-player-height', height + 'px');
+      }
+    },
     openSiteMenu() {
       if (!isFacebook) return false;
       const control = document.querySelector('[aria-label="Facebook Menu" i]');
@@ -690,6 +789,7 @@
       return true;
     },
     pause() {
+      setPlayerFullscreen(false);
       running = false;
       clearTimeout(timer); timer = undefined;
       pause(document);
@@ -704,7 +804,7 @@
     }
   }, true);
   document.addEventListener('click', event => {
-    if (!running || !event.isTrusted || isAuthenticationPage()) return;
+    if (!running || fullscreenPlayer || !event.isTrusted || isAuthenticationPage()) return;
     const target = event.target instanceof Element ? event.target : null;
     if (!target || target.closest('a,button,input,textarea,select,label,summary,video,audio,iframe,canvas,[role="button"],[role="tab"],[role="link"],[role="dialog"],[role="alertdialog"],[contenteditable="true"],[data-cv-hidden]')) return;
     if (window.getSelection()?.toString()) return;
