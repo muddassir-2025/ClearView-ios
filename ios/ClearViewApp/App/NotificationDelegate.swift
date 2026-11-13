@@ -1,7 +1,35 @@
 import UIKit
 import UserNotifications
 
+/// Video fullscreen is the one place ClearView leaves portrait: the player
+/// rotates to landscape, follows either landscape direction, and returns to
+/// portrait when it closes.
+enum AppOrientation {
+    static var supported: UIInterfaceOrientationMask = .allButUpsideDown
+
+    static func mask(fullscreen: Bool) -> UIInterfaceOrientationMask {
+        fullscreen ? .landscape : .portrait
+    }
+
+    @MainActor
+    static func set(fullscreen: Bool) {
+        let orientationMask = mask(fullscreen: fullscreen)
+        supported = orientationMask
+        guard let scene = UIApplication.shared.connectedScenes
+            .compactMap({ $0 as? UIWindowScene })
+            .first(where: { $0.activationState == .foregroundActive })
+            ?? UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first
+        else { return }
+        scene.keyWindow?.rootViewController?.setNeedsUpdateOfSupportedInterfaceOrientations()
+        scene.requestGeometryUpdate(.iOS(interfaceOrientations: orientationMask))
+    }
+}
+
 final class NotificationDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
+    func application(_ application: UIApplication, supportedInterfaceOrientationsFor window: UIWindow?) -> UIInterfaceOrientationMask {
+        AppOrientation.supported
+    }
+
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
         let center = UNUserNotificationCenter.current()
         center.delegate = self

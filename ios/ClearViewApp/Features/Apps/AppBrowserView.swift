@@ -26,8 +26,8 @@ struct AppBrowserView: View {
 
     private var browserLayout: some View {
         VStack(spacing: 0) {
-            if !session.navigationHidden { header }
-            if let notice = session.protectionNotice {
+            if !session.navigationHidden && !session.playerFullscreen { header }
+            if let notice = session.protectionNotice, !session.playerFullscreen {
                 Text(notice).font(.caption).foregroundStyle(Color.cvOnSurfaceVariant).padding(8)
             }
             ZStack(alignment: .leading) {
@@ -35,9 +35,10 @@ struct AppBrowserView: View {
                 GeometryReader { geometry in
                     Rectangle().fill(Color.cvPrimary).frame(width: geometry.size.width * session.progress)
                 }.opacity(session.isLoading ? 1 : 0)
-            }.frame(height: 2).accessibilityHidden(true)
+            }.frame(height: session.playerFullscreen ? 0 : 2).accessibilityHidden(true)
             ZStack {
                 AppWebsiteView(session: session)
+                    .onGeometryChange(for: CGSize.self) { $0.size } action: { session.updatePlayerViewport($0) }
                     .accessibilityHidden(session.blockedPage != nil || session.errorMessage != nil || session.showsIntentHome)
                 if let blocked = session.blockedPage {
                     browserState(symbol: "eye.slash", title: "A little less noise", message: blocked, action: "Back to home") { session.goHome() }
@@ -58,8 +59,10 @@ struct AppBrowserView: View {
             }
         }
         .ignoresSafeArea(.container, edges: bottomSafeAreaEdges)
+        .statusBarHidden(session.playerFullscreen)
+        .persistentSystemOverlays(session.playerFullscreen ? .hidden : .automatic)
         .overlay(alignment: .bottomTrailing) {
-            if session.navigationHidden {
+            if session.navigationHidden && !session.playerFullscreen {
                 Button { withAnimation(.easeInOut(duration: 0.18)) { session.navigationHidden = false } } label: {
                     Image(systemName: "chevron.up").font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(Color.cvPrimary).frame(width: 44, height: 34)
@@ -182,11 +185,11 @@ struct AppBrowserView: View {
     /// navigation. A second bottom bar only covers their content, so their
     /// destinations live in the header menu instead.
     private var bottomSafeAreaEdges: Edge.Set {
-        session.site.usesBrandedHeader ? .bottom : Edge.Set()
+        session.playerFullscreen ? .all : session.site.usesBrandedHeader ? .bottom : Edge.Set()
     }
 
     private var showsBottomNavigation: Bool {
-        session.showsAppNavigation && !session.navigationHidden && !session.site.usesBrandedHeader
+        session.showsAppNavigation && !session.navigationHidden && !session.playerFullscreen && !session.site.usesBrandedHeader
     }
 
     private var showsBackButton: Bool {

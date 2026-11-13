@@ -19,6 +19,7 @@ final class AppBrowserSession: NSObject, WKNavigationDelegate, WKUIDelegate {
     var unsupportedLink = false
     var showsIntentHome = false
     var navigationHidden = false
+    var playerFullscreen = false
     var protectionNotice: String?
     /// The page's own background, so the home-indicator strip blends into the
     /// page instead of showing a second bar under it.
@@ -144,7 +145,19 @@ final class AppBrowserSession: NSObject, WKNavigationDelegate, WKUIDelegate {
         applyPreferences()
     }
 
+    func updatePlayerViewport(_ size: CGSize) {
+        guard size.width > 0, size.height > 0 else { return }
+        invoke("window.__clearviewApps?.updateViewport(width, height)", arguments: ["width": size.width, "height": size.height])
+    }
+
+    func setPlayerFullscreen(_ enabled: Bool) {
+        guard playerFullscreen != enabled else { return }
+        playerFullscreen = enabled
+        AppOrientation.set(fullscreen: enabled)
+    }
+
     func pause() {
+        setPlayerFullscreen(false)
         active = false
         finishDialog(nil)
         invoke("window.__clearviewApps?.pause()")
@@ -338,6 +351,12 @@ final class AppBrowserSession: NSObject, WKNavigationDelegate, WKUIDelegate {
             updatePageBackground(body)
             return
         }
+        if kind == "playerFullscreen" {
+            guard AppSite.youtube.owns(url), let enabled = body["enabled"] as? Bool else { return }
+            setPlayerFullscreen(enabled)
+            updatePlayerViewport(webView.bounds.size)
+            return
+        }
         if kind == "whitespaceTap" {
             guard body["url"] as? String == webView.url?.absoluteString,
                   !site.isAuthenticationPage(webView.url ?? site.home), blockedPage == nil else { return }
@@ -455,6 +474,7 @@ final class AppBrowserSession: NSObject, WKNavigationDelegate, WKUIDelegate {
     }
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+        setPlayerFullscreen(false)
         isLoading = true
         navigationHidden = false
         showsIntentHome = false

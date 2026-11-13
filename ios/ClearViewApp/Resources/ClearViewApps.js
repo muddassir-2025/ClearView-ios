@@ -30,6 +30,9 @@
   let timer;
   let sequence = 0;
   let lastPageState = '';
+  // Settings or a new route invalidate earlier verdicts. Feed playback alone
+  // must not, or a preview would be hidden and re-checked on every label tick.
+  let reviewEpoch = 0;
   const documentID = Math.random().toString(36).slice(2) + Date.now().toString(36);
   const tracked = new Map();
   const elementIDs = new WeakMap();
@@ -65,6 +68,9 @@
     return (visible + ' ' + labels).slice(0, max);
   };
   const pause = element => element.querySelectorAll('video,audio').forEach(media => media.pause());
+  const mark = (element, name, value = 'true') => {
+    if (element.getAttribute(name) !== value) element.setAttribute(name, value);
+  };
 
   const style = document.createElement('style');
   style.id = 'clearview-app-style';
@@ -105,12 +111,47 @@
     html[data-cv-app-shell="true"] ytm-mobile-topbar-renderer-v2,
     html[data-cv-app-shell="true"] ytm-feed-filter-chip-bar-renderer,
     html[data-cv-app-shell="true"] .feed-filter-chip-bar,
+    /* Hide the chip renderers themselves, never a layout wrapper that may also
+       contain the watch page's title, action bar, or comments. */
+    html[data-cv-app-shell="true"] ytm-related-chip-cloud-renderer:not(:has(ytm-slim-video-metadata-renderer,ytm-slim-video-metadata-section-renderer,ytm-slim-video-action-bar-renderer,ytm-comments-section-renderer)),
+    html[data-cv-app-shell="true"] ytm-chip-cloud-renderer.chip-bar:not(:has(ytm-slim-video-metadata-renderer,ytm-slim-video-metadata-section-renderer,ytm-slim-video-action-bar-renderer,ytm-comments-section-renderer)),
     html[data-cv-app-shell="true"] ytd-masthead,
     html[data-cv-app-shell="true"] #masthead-container { display:none!important; }
     html[data-cv-app-shell="true"] ytm-app {
-      padding-top:0!important;padding-bottom:0!important;margin-top:0!important;
+      padding-top:0!important;padding-bottom:0!important;margin-top:0!important;border-top:0!important;
       --ytm-pivot-bar-height:0px;--mobile-topbar-height:0px;
       --default-mobile-topbar-height:0px;--default-ytd-masthead-height:0px;
+    }
+    html[data-cv-app-shell="true"][data-cv-youtube-home="true"] ytm-app > .page-container {
+      margin-top:calc(-1 * var(--cv-youtube-home-gap,0px))!important;
+    }
+    /* Watch pages reserve YouTube's 48px mobile topbar above the player. The
+       native header already fills that slot, so keep the player at the top. */
+    html[data-cv-app-shell="true"] .player-container,
+    html[data-cv-app-shell="true"] .player-container.sticky-player {
+      top:0!important;
+    }
+    html[data-cv-player-fullscreen="true"], html[data-cv-player-fullscreen="true"] body { overflow:hidden!important; }
+    html[data-cv-player-fullscreen="true"] [data-cv-fullscreen-player="true"] {
+      position:fixed!important;inset:0!important;width:var(--cv-player-width,100vw)!important;height:var(--cv-player-height,100dvh)!important;
+      min-width:0!important;min-height:0!important;max-width:none!important;max-height:none!important;
+      margin:0!important;padding:0!important;box-sizing:border-box!important;transform:none!important;
+      z-index:2147483646!important;background:#000!important;
+    }
+    [data-cv-fullscreen-player="true"] #player,
+    [data-cv-fullscreen-player="true"] .html5-video-player,
+    [data-cv-fullscreen-player="true"] .html5-video-container,
+    [data-cv-fullscreen-player="true"] #player-control-container,
+    [data-cv-fullscreen-player="true"] #player-control-overlay {
+      position:absolute!important;inset:0!important;width:100%!important;height:100%!important;
+      min-height:0!important;max-height:none!important;margin:0!important;padding:0!important;box-sizing:border-box!important;transform:none!important;
+    }
+    [data-cv-fullscreen-player="true"] .ytp-caption-window-container {
+      width:100%!important;height:100%!important;z-index:30!important;
+    }
+    [data-cv-fullscreen-player="true"] .caption-window { top:auto!important;bottom:12%!important; }
+    [data-cv-fullscreen-player="true"] video {
+      width:100%!important;height:100%!important;left:0!important;top:0!important;object-fit:contain!important;
     }
     html[data-cv-app-shell="true"] ytm-rich-item-renderer { margin-inline:0!important; }
     html[data-cv-app-shell="true"] .media-item-thumbnail-container,
@@ -154,23 +195,71 @@
   function mount() {
     if (!document.documentElement) return;
     if (!style.isConnected) (document.head || document.documentElement).append(style);
-    document.documentElement.dataset.cvDark = String(config.dark);
-    document.documentElement.dataset.cvService = String(usesDarkPalette);
-    document.documentElement.dataset.cvHideShorts = String(Boolean(shortSetting()));
-    document.documentElement.dataset.cvAppShell = String(Boolean(config.appShell) && isAppShell && !isAuthenticationPage());
-    document.documentElement.dataset.cvRemoveBlocked = String(config.removeBlockedCards !== false);
-    document.documentElement.dataset.cvHideGoogleCategories = String(isGoogle && config.hideGoogleCategories);
-    document.documentElement.dataset.cvBlockAds = String(isYouTube && config.blockAds);
+    const root = document.documentElement;
+    // Scans run continuously. Writing an attribute the page already has forces
+    // WebKit to restyle the whole document, which can drop a video frame.
+    const flag = (name, value) => {
+      if (root.dataset[name] !== value) root.dataset[name] = value;
+    };
+    flag('cvYoutubeHome', String(isYouTube && location.pathname === '/'));
+    flag('cvDark', String(config.dark));
+    flag('cvService', String(usesDarkPalette));
+    flag('cvHideShorts', String(Boolean(shortSetting())));
+    flag('cvAppShell', String(Boolean(config.appShell) && isAppShell && !isAuthenticationPage()));
+    flag('cvRemoveBlocked', String(config.removeBlockedCards !== false));
+    flag('cvHideGoogleCategories', String(isGoogle && config.hideGoogleCategories));
+    flag('cvBlockAds', String(isYouTube && config.blockAds));
   }
+
+  // YouTube renders captions in HTML above the video. iOS's video-only
+  // fullscreen drops that layer, so expand the complete player in this web view.
+  let fullscreenPlayer = null;
+  let fullscreenScroll = 0;
+  function setPlayerFullscreen(enabled, player) {
+    if (enabled && !fullscreenPlayer) {
+      if (!player?.querySelector('video')) return;
+      fullscreenScroll = window.scrollY;
+      fullscreenPlayer = player;
+      player.setAttribute('data-cv-fullscreen-player', 'true');
+      document.documentElement.setAttribute('data-cv-player-fullscreen', 'true');
+      send({kind:'playerFullscreen', enabled:true});
+    } else if (!enabled && fullscreenPlayer) {
+      fullscreenPlayer.removeAttribute('data-cv-fullscreen-player');
+      document.documentElement.removeAttribute('data-cv-player-fullscreen');
+      fullscreenPlayer = null;
+      send({kind:'playerFullscreen', enabled:false});
+      window.scrollTo(0, fullscreenScroll);
+    }
+  }
+  document.addEventListener('click', event => {
+    if (!isYouTube || !config.appShell || !running) return;
+    const control = event.target.closest?.('button,[role="button"]');
+    if (!control) return;
+    const label = control.getAttribute('aria-label') || control.getAttribute('title') || '';
+    if (!control.matches('.ytp-fullscreen-button,.fullscreen-button')
+        && !/^(?:enter |exit )?full[ -]?screen(?:[ (]|$)/i.test(label)) return;
+    const player = control.closest('#player-container-id,#player,.html5-video-player') || document.querySelector('#player-container-id,#player');
+    if (!player?.querySelector('video')) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    setPlayerFullscreen(!fullscreenPlayer, player);
+  }, true);
+  document.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && fullscreenPlayer) {
+      event.preventDefault();
+      setPlayerFullscreen(false);
+    }
+  });
 
   function route() {
     if (lastURL !== location.href) {
+      setPlayerFullscreen(false);
       lastURL = location.href;
       lastChromeSweep = 0;
       detailCover?.remove();
       detailCover = null;
       send({kind:'route'});
-      tracked.forEach(value => { value.fingerprint = ''; });
+      reviewEpoch++;
     }
     const blocked = Boolean(shortSetting()) && shortPath(location.href);
     let cover = document.getElementById('clearview-short-route-cover');
@@ -220,11 +309,26 @@
           ? 'footer,[role="contentinfo"],[data-testid*="upsell"]'
           : 'nav,[role="navigation"],[role="banner"],footer,[role="contentinfo"]';
     document.querySelectorAll(selector).forEach(node => {
-      if (!node.closest('article,form,[role="dialog"]')) node.setAttribute('data-cv-web-chrome', 'true');
+      if (!node.closest('article,form,[role="dialog"]')) mark(node, 'data-cv-web-chrome');
     });
     if (!isYouTube && !isFacebook) document.querySelectorAll('header').forEach(node => {
-      if (!node.closest('main,article,form,[role="dialog"]')) node.setAttribute('data-cv-web-chrome', 'true');
+      if (!node.closest('main,article,form,[role="dialog"]')) mark(node, 'data-cv-web-chrome');
     });
+    if (isYouTube && location.pathname === '/') {
+      const app = document.querySelector('ytm-app');
+      const page = app?.querySelector(':scope > .page-container');
+      if (page) {
+        const previous = parseFloat(page.style.getPropertyValue('--cv-youtube-home-gap')) || 0;
+        const gap = page.getBoundingClientRect().top - app.getBoundingClientRect().top + previous;
+        // Only consume a small empty masthead slot, never a player or feed card.
+        // Quantise so sub-pixel measurements do not rewrite the page margin on
+        // every scan while a muted preview is playing.
+        const rounded = Math.round(gap * 2) / 2;
+        if (rounded >= 0 && rounded <= 80 && Math.abs(rounded - previous) >= 0.5) {
+          page.style.setProperty('--cv-youtube-home-gap', rounded + 'px');
+        }
+      }
+    }
     if (isFacebook && !isAuthenticationPage()) {
       // Keep Facebook's real navigation (friends, messages, notifications,
       // marketplace). Only replace the wordmark/search/menu row with our header.
@@ -240,7 +344,7 @@
             const rect = row.getBoundingClientRect();
             if (rect.height > 100 || row.querySelector('article,[role="article"],form,[role="tablist"]')) break;
             if (rect.width > innerWidth * 0.8 && rect.height >= 28) {
-              row.setAttribute('data-cv-web-chrome', 'true');
+              mark(row, 'data-cv-web-chrome');
               break;
             }
           }
@@ -369,9 +473,28 @@
     if (!isService) return;
     // Navigation is not necessarily an anchor: YouTube's pivot items often
     // contain buttons and Instagram also uses role=button controls.
-    document.querySelectorAll('[data-cv-short-nav]').forEach(node => node.removeAttribute('data-cv-short-nav'));
-    document.querySelectorAll('[data-cv-short-shelf]').forEach(node => node.removeAttribute('data-cv-short-shelf'));
+    if (!shortSetting()) {
+      document.querySelectorAll('[data-cv-short-nav],[data-cv-short-shelf]').forEach(node => {
+        node.removeAttribute('data-cv-short-nav');
+        node.removeAttribute('data-cv-short-shelf');
+      });
+      return;
+    }
     const selector = 'a[href],button[aria-label],button[title],[role="button"],[aria-label="Reels" i],[role="link"],[role="tab"],ytm-pivot-bar-item-renderer,ytm-pivot-bar-item-view-model,[tab-identifier],[data-tab-identifier]';
+    // Keep existing marks. Removing and re-adding them on every scan restyles
+    // the whole page while a feed preview is playing, which can flash black.
+    document.querySelectorAll('[data-cv-short-nav]').forEach(node => {
+      const controls = node.matches(selector) ? [node, ...node.querySelectorAll(selector)] : Array.from(node.querySelectorAll(selector));
+      if (!controls.some(control => shortControl(control))) node.removeAttribute('data-cv-short-nav');
+    });
+    document.querySelectorAll('[data-cv-short-shelf]').forEach(section => {
+      const hasShorts = section.querySelector('a[href^="/shorts"],ytm-shorts-lockup-view-model,ytm-shorts-lockup-view-model-v2,yt-shorts-lockup-view-model');
+      const heading = Array.from(section.querySelectorAll('h2,h3,[role="heading"],ytm-shelf-header-renderer'))
+        .find(node => /^shorts$/i.test((node.textContent || '').trim()));
+      if (!hasShorts && !heading && !section.querySelector('[aria-label="Shorts"]')) {
+        section.removeAttribute('data-cv-short-shelf');
+      }
+    });
     document.querySelectorAll(selector).forEach(element => {
       if (!shortControl(element)) return;
       let item = element.closest('ytm-pivot-bar-item-renderer,ytm-pivot-bar-item-view-model,[role="tab"],[role="menuitem"]') || element;
@@ -386,7 +509,7 @@
           item = parent;
         }
       }
-      item.setAttribute('data-cv-short-nav', 'true');
+      mark(item, 'data-cv-short-nav');
     });
     if (isFacebook) {
       // Facebook's mobile renderer overlaps each 50px tab with a negative top
@@ -419,11 +542,11 @@
             section = node;
           }
         }
-        if (section) section.setAttribute('data-cv-short-shelf', 'true');
+        if (section) mark(section, 'data-cv-short-shelf');
       });
       document.querySelectorAll(shelves).forEach(section => {
         const hasShorts = section.querySelector('a[href^="/shorts"],ytm-shorts-lockup-view-model,ytm-shorts-lockup-view-model-v2,yt-shorts-lockup-view-model');
-        if (hasShorts && !section.querySelector('a[href*="/watch?"]')) section.setAttribute('data-cv-short-shelf', 'true');
+        if (hasShorts && !section.querySelector('a[href*="/watch?"]')) mark(section, 'data-cv-short-shelf');
       });
     }
   }
@@ -506,17 +629,32 @@
     if (!id) { id = 'cv' + (++sequence); elementIDs.set(element, id); }
     const fingerprint = JSON.stringify(description);
     const previous = tracked.get(id);
-    if (previous?.fingerprint === fingerprint) return;
+    const stale = !previous || previous.epoch !== reviewEpoch;
+    if (previous?.fingerprint === fingerprint && !stale) return;
     const revision = (previous?.revision || 0) + 1;
-    tracked.set(id, {element, fingerprint, description, revision});
-    // Feed cards stay concealed until the native matcher returns a verdict.
-    if (!description.detail) element.setAttribute('data-cv-review', 'pending');
-    items.push({id, revision, text:description.text, creator:description.creator, url:description.url, short:description.short});
+    // A card whose verdict is already applied keeps its visibility when
+    // YouTube's autoplay preview changes a label or counter inside it. Hiding
+    // an approved card again for the native check makes the playing video
+    // flash black.
+    const reviewed = Boolean(previous) && previous.description.url === description.url
+      && !element.hasAttribute('data-cv-review');
+    tracked.set(id, {element, fingerprint, description, revision, epoch:reviewEpoch});
+    // Detail pages keep re-checking profile/metadata text as it loads.
+    if (description.detail) {
+      items.push({id, revision, text:description.text, creator:description.creator, url:description.url, short:description.short});
+      return;
+    }
+    if (!reviewed || stale) {
+      // Feed cards stay concealed until the native matcher returns a verdict.
+      element.setAttribute('data-cv-review', 'pending');
+      items.push({id, revision, text:description.text, creator:description.creator, url:description.url, short:description.short});
+    }
   }
 
   function scan() {
     timer = undefined;
     if (!running || !document.body) return;
+    if (fullscreenPlayer && !fullscreenPlayer.isConnected) setPlayerFullscreen(false);
     mount();
     route();
     markAppChrome();
@@ -648,6 +786,7 @@
     update(next) {
       config = next;
       running = Boolean(next.active);
+      reviewEpoch++;
       tracked.forEach(entry => { entry.fingerprint = ''; });
       if (!running) pause(document);
       mount();
@@ -660,6 +799,12 @@
       schedule();
     },
     resolve,
+    updateViewport(width, height) {
+      if (width > 0 && height > 0) {
+        document.documentElement.style.setProperty('--cv-player-width', width + 'px');
+        document.documentElement.style.setProperty('--cv-player-height', height + 'px');
+      }
+    },
     openSiteMenu() {
       if (!isFacebook) return false;
       const control = document.querySelector('[aria-label="Facebook Menu" i]');
@@ -690,6 +835,7 @@
       return true;
     },
     pause() {
+      setPlayerFullscreen(false);
       running = false;
       clearTimeout(timer); timer = undefined;
       pause(document);
@@ -704,7 +850,7 @@
     }
   }, true);
   document.addEventListener('click', event => {
-    if (!running || !event.isTrusted || isAuthenticationPage()) return;
+    if (!running || fullscreenPlayer || !event.isTrusted || isAuthenticationPage()) return;
     const target = event.target instanceof Element ? event.target : null;
     if (!target || target.closest('a,button,input,textarea,select,label,summary,video,audio,iframe,canvas,[role="button"],[role="tab"],[role="link"],[role="dialog"],[role="alertdialog"],[contenteditable="true"],[data-cv-hidden]')) return;
     if (window.getSelection()?.toString()) return;

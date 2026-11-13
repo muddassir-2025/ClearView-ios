@@ -1,4 +1,5 @@
 import XCTest
+import UIKit
 import WebKit
 @testable import ClearView
 
@@ -308,4 +309,230 @@ final class AppShortVideoTests: XCTestCase {
         XCTAssertTrue(promoStillHidden, "repeat scans must not leave the promo background behind")
     }
 
+    func testYouTubeHeaderSpacingAndFullscreenPreserveCaptionLayer() async throws {
+        let web = WKWebView(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+        web.loadHTMLString("""
+        <html><head><meta name="viewport" content="width=device-width,initial-scale=1">
+        <style>body{margin:0}ytm-app{display:block;border-top:50px solid transparent}
+        #player{position:relative;width:390px;height:220px;padding-bottom:56.25%;background:black}
+        .captions{position:absolute;bottom:20px;left:20px;color:white}</style></head>
+        <body><ytm-app><div style="height:50px"></div><div class="page-container"><div id="player" class="html5-video-player">
+        <div class="html5-video-container"><video playsinline></video></div>
+        <div class="captions">A caption above the video</div>
+        <button class="ytp-fullscreen-button" aria-label="Full screen" onclick="window.videoOnlyFullscreen=true">Full screen</button>
+        </div></div></ytm-app></body></html>
+        """, baseURL: URL(string: "https://m.youtube.com/"))
+        for _ in 0..<100 {
+            if !web.isLoading { break }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        let scriptURL = try XCTUnwrap(Bundle(for: AppBrowserSession.self).url(forResource: "ClearViewApps", withExtension: "js"))
+        let source = try String(contentsOf: scriptURL, encoding: .utf8)
+        _ = try await web.evaluateJavaScript("""
+        var clearViewInitial={site:'youtube',appShell:true,active:true};
+        \(source)
+        window.__clearviewApps.update(clearViewInitial);
+        true;
+        """)
+        _ = try await web.evaluateJavaScript("window.__clearviewApps.update(clearViewInitial);true")
+        let feedTop = try await web.evaluateJavaScript("document.querySelector('.page-container').getBoundingClientRect().top") as! Double
+        XCTAssertEqual(feedTop, 0, accuracy: 0.5, "the hidden masthead must leave no reserved space after repeated scans")
+        _ = try await web.evaluateJavaScript("window.playerInlineHeight=document.getElementById('player').getBoundingClientRect().height;window.__clearviewApps.updateViewport(390,500);document.querySelector('.ytp-fullscreen-button').click();true")
+        let expanded = try await web.evaluateJavaScript("""
+        (()=>{const p=document.getElementById('player').getBoundingClientRect();
+        const c=document.querySelector('.captions').getBoundingClientRect();
+        return p.width===390 && p.height===500 && c.top>=p.top && c.bottom<=p.bottom
+          && !window.videoOnlyFullscreen
+          && document.documentElement.getAttribute('data-cv-player-fullscreen')==='true';})()
+        """) as? Bool
+        XCTAssertEqual(expanded, true, "fullscreen must include the HTML captions and intercept video-only fullscreen")
+        let noDoneButton = try await web.evaluateJavaScript("!document.getElementById('clearview-exit-fullscreen')") as? Bool
+        XCTAssertEqual(noDoneButton, true, "fullscreen must not add a separate Done button over YouTube's controls")
+        _ = try await web.evaluateJavaScript("document.querySelector('.ytp-fullscreen-button').click();true")
+        let restored = try await web.evaluateJavaScript("!document.documentElement.hasAttribute('data-cv-player-fullscreen') && document.getElementById('player').getBoundingClientRect().height===window.playerInlineHeight") as? Bool
+        XCTAssertEqual(restored, true, "YouTube's own fullscreen control must close the expanded player")
+        _ = try await web.evaluateJavaScript("document.querySelector('.ytp-fullscreen-button').click();window.__clearviewApps.pause();true")
+        let paused = try await web.evaluateJavaScript("!document.documentElement.hasAttribute('data-cv-player-fullscreen')") as? Bool
+        XCTAssertEqual(paused, true, "leaving the app must exit the expanded player")
+    }
+
+    func testYouTubeWatchPlayerConsumesReservedTopbarSlot() async throws {
+        let web = WKWebView(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+        web.loadHTMLString("""
+        <html><head><meta name="viewport" content="width=device-width,initial-scale=1">
+        <style>body{margin:0}ytm-app{display:block;padding-top:48px}
+        .player-container{position:absolute;top:48px;left:0;right:0}
+        #player{width:390px;height:220px;background:black}</style></head>
+        <body><ytm-app><div class="page-container"><div class="player-container">
+        <div id="player" class="html5-video-player"><div class="html5-video-container"><video playsinline></video></div></div>
+        </div></div></ytm-app></body></html>
+        """, baseURL: URL(string: "https://m.youtube.com/watch?v=abc123")!)
+        for _ in 0..<100 {
+            if !web.isLoading { break }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        let scriptURL = try XCTUnwrap(Bundle(for: AppBrowserSession.self).url(forResource: "ClearViewApps", withExtension: "js"))
+        let source = try String(contentsOf: scriptURL, encoding: .utf8)
+        _ = try await web.evaluateJavaScript("""
+        var clearViewInitial={site:'youtube',appShell:true,active:true};
+        \(source)
+        window.__clearviewApps.update(clearViewInitial);
+        true;
+        """)
+        let playerTop = try await web.evaluateJavaScript("document.querySelector('.player-container').getBoundingClientRect().top") as! Double
+        XCTAssertEqual(playerTop, 0, accuracy: 0.5, "the native header must replace YouTube's 48px watch-page topbar slot")
+        _ = try await web.evaluateJavaScript("window.__clearviewApps.update({site:'youtube',appShell:false,active:true});true")
+        let restored = try await web.evaluateJavaScript("document.querySelector('.player-container').getBoundingClientRect().top") as! Double
+        XCTAssertEqual(restored, 48, accuracy: 0.5, "disabling the app shell must restore YouTube's own topbar spacing")
+        _ = try await web.evaluateJavaScript("window.__clearviewApps.update({site:'youtube',appShell:true,active:true});true")
+        let reapplied = try await web.evaluateJavaScript("document.querySelector('.player-container').getBoundingClientRect().top") as! Double
+        XCTAssertEqual(reapplied, 0, accuracy: 0.5, "re-enabling the app shell must consume the slot again")
+    }
+
+    func testPlayerFullscreenUsesLandscapeAndReturnsToPortrait() {
+        XCTAssertEqual(AppOrientation.mask(fullscreen: true), .landscape,
+                       "fullscreen must allow both landscape directions, never portrait")
+        XCTAssertEqual(AppOrientation.mask(fullscreen: false), .portrait,
+                       "closing the player must return the browser to portrait")
+    }
+
+    /// YouTube's watch-next feed shows a floating row of filter chips ("All",
+    /// "From <channel>", "Related", "For you") while scrolling. Only the chip
+    /// renderers are removed. A surrounding layout slot can also contain the
+    /// watch title, action bar, and comments, so hiding a generic wrapper hid
+    /// that metadata in some signed-in layouts.
+    func testYouTubeRelatedChipBarsAreRemovedWithAppShell() async throws {
+        let web = WKWebView(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+        web.loadHTMLString("""
+        <html><head><meta name="viewport" content="width=device-width,initial-scale=1">
+        <style>body{margin:0}ytm-app,ytm-related-chip-cloud-renderer,ytm-chip-cloud-renderer,
+        .related-chips-slot-wrapper,#filter-chip-bar,ytm-rich-item-renderer,
+        ytm-slim-video-metadata-section-renderer,ytm-slim-video-action-bar-renderer,
+        ytm-comments-section-renderer{display:block}.related-chips-slot-wrapper{min-height:52px}
+        #filter-chip-bar{min-height:48px}</style></head>
+        <body><ytm-app><div class="page-container">
+          <div class="related-chips-slot-wrapper">
+            <ytm-slim-video-metadata-section-renderer id="metadata">Secretly Building my Wife's Dream Patio</ytm-slim-video-metadata-section-renderer>
+            <ytm-slim-video-action-bar-renderer id="likes">19M likes</ytm-slim-video-action-bar-renderer>
+            <ytm-related-chip-cloud-renderer id="relatedChips" class="chips-fixed-positioning chips-visible"><ytm-chip-cloud-renderer class="chip-bar">All From Morley Kert Related For you</ytm-chip-cloud-renderer></ytm-related-chip-cloud-renderer>
+            <ytm-comments-section-renderer id="comments">Comments</ytm-comments-section-renderer>
+          </div>
+          <div id="related-chips-sentinel" class="related-chips-sentinel">sentinel</div>
+          <div id="filter-chip-bar">All From Morley Kert Related For you</div>
+          <ytm-feed-filter-chip-bar-renderer id="homeChips"><ytm-chip-cloud-renderer class="chip-bar">Home chips</ytm-chip-cloud-renderer></ytm-feed-filter-chip-bar-renderer>
+          <div class="feed-filter-chip-bar" id="feedChips">All Home Videos</div>
+          <ytm-rich-item-renderer><a href="/watch?v=abc123">A related video</a></ytm-rich-item-renderer>
+        </div></ytm-app></body></html>
+        """, baseURL: URL(string: "https://m.youtube.com/watch?v=abc123")!)
+        for _ in 0..<100 {
+            if !web.isLoading { break }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        let scriptURL = try XCTUnwrap(Bundle(for: AppBrowserSession.self).url(forResource: "ClearViewApps", withExtension: "js"))
+        let source = try String(contentsOf: scriptURL, encoding: .utf8)
+        _ = try await web.evaluateJavaScript("""
+        var clearViewInitial={site:'youtube',appShell:true,active:true};
+        \(source)
+        window.__clearviewApps.update(clearViewInitial);
+        true;
+        """)
+        let display: (String) async throws -> String = { selector in
+            try await web.evaluateJavaScript("getComputedStyle(document.querySelector('\(selector)')).display") as! String
+        }
+        let visibleHeight: (String) async throws -> Double = { selector in
+            try await web.evaluateJavaScript("document.querySelector('\(selector)').getBoundingClientRect().height") as! Double
+        }
+        for selector in ["ytm-related-chip-cloud-renderer", "ytm-feed-filter-chip-bar-renderer",
+                         ".feed-filter-chip-bar"] {
+            let value = try await display(selector)
+            XCTAssertEqual(value, "none", "\(selector) must disappear with the app shell")
+        }
+        for selector in [".related-chips-slot-wrapper", "#related-chips-sentinel", "#filter-chip-bar"] {
+            let value = try await display(selector)
+            XCTAssertNotEqual(value, "none", "\(selector) is a layout slot, not a chip bar, and must stay")
+        }
+        for selector in ["#metadata", "#likes", "#comments"] {
+            let value = try await display(selector)
+            XCTAssertNotEqual(value, "none", "\(selector) must stay visible on a watch page")
+            let height = try await visibleHeight(selector)
+            XCTAssertGreaterThan(height, 0, "\(selector) must keep its layout height")
+        }
+        let card = try await display("ytm-rich-item-renderer")
+        XCTAssertNotEqual(card, "none", "a related video must remain visible")
+        _ = try await web.evaluateJavaScript("window.__clearviewApps.update({site:'youtube',appShell:false,active:true});true")
+        for selector in ["ytm-related-chip-cloud-renderer", "ytm-feed-filter-chip-bar-renderer",
+                         ".feed-filter-chip-bar"] {
+            let value = try await display(selector)
+            XCTAssertNotEqual(value, "none", "\(selector) must return when the app shell is disabled")
+        }
+    }
+
+    /// YouTube's home feed autoplay previews rewrite labels and counters inside
+    /// the playing card. Re-checking an already approved card would hide the
+    /// video for a native round trip, which looks like a black flicker.
+    func testApprovedFeedCardIsNotRehiddenWhenPreviewTextChanges() async throws {
+        let collector = MessageCollector()
+        let controller = WKUserContentController()
+        controller.add(collector, name: "appsFilter")
+        let configuration = WKWebViewConfiguration()
+        configuration.userContentController = controller
+        let web = WKWebView(frame: CGRect(x: 0, y: 0, width: 390, height: 844), configuration: configuration)
+        web.loadHTMLString("""
+        <html><head><meta name="viewport" content="width=device-width,initial-scale=1">
+        <style>body{margin:0}ytm-rich-item-renderer{display:block}</style></head>
+        <body><ytm-app><div class="page-container">
+          <ytm-rich-item-renderer id="card"><a href="/watch?v=abc123">Quiet video</a><span id="meta">1 view</span></ytm-rich-item-renderer>
+        </div></ytm-app></body></html>
+        """, baseURL: URL(string: "https://m.youtube.com/")!)
+        for _ in 0..<100 {
+            if !web.isLoading { break }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        let scriptURL = try XCTUnwrap(Bundle(for: AppBrowserSession.self).url(forResource: "ClearViewApps", withExtension: "js"))
+        let source = try String(contentsOf: scriptURL, encoding: .utf8)
+        _ = try await web.evaluateJavaScript("""
+        var clearViewInitial={site:'youtube',appShell:true,active:true};
+        \(source)
+        window.__clearviewApps.update(clearViewInitial);
+        true;
+        """)
+        var scan: [String: Any]?
+        for _ in 0..<100 {
+            scan = collector.bodies.first { ($0["kind"] as? String) == "scan" }
+            if scan != nil { break }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        let message = try XCTUnwrap(scan, "the card should be sent for its first verdict")
+        let document = try XCTUnwrap(message["document"] as? String)
+        let items = try XCTUnwrap(message["items"] as? [[String: Any]])
+        let replies: [[String: Any]] = items.compactMap { item in
+            guard let id = item["id"] as? String, let revision = item["revision"] as? Int else { return nil }
+            return ["id": id, "revision": revision, "blocked": false]
+        }
+        let replyData = try JSONSerialization.data(withJSONObject: replies)
+        let replyJSON = try XCTUnwrap(String(data: replyData, encoding: .utf8))
+        let tokenData = try JSONEncoder().encode(document)
+        let tokenJSON = try XCTUnwrap(String(data: tokenData, encoding: .utf8))
+        _ = try await web.evaluateJavaScript("window.__clearviewApps.resolve(\(replyJSON), \(tokenJSON));true")
+        let approved = try await web.evaluateJavaScript("!document.getElementById('card').hasAttribute('data-cv-review')") as? Bool
+        XCTAssertEqual(approved, true, "the native verdict must reveal the approved card")
+
+        _ = try await web.evaluateJavaScript("document.getElementById('meta').textContent='2 views';true")
+        try await Task.sleep(for: .milliseconds(600))
+        let stillVisible = try await web.evaluateJavaScript("""
+        (()=>{const card=document.getElementById('card');
+        return !card.hasAttribute('data-cv-review') && !card.hasAttribute('data-cv-hidden');})()
+        """) as? Bool
+        XCTAssertEqual(stillVisible, true, "changing only the preview metadata must not hide or re-review the card")
+    }
+
+}
+
+@MainActor
+private final class MessageCollector: NSObject, WKScriptMessageHandler {
+    var bodies: [[String: Any]] = []
+
+    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        if let body = message.body as? [String: Any] { bodies.append(body) }
+    }
 }
