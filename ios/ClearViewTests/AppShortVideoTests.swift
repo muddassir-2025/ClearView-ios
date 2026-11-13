@@ -396,4 +396,119 @@ final class AppShortVideoTests: XCTestCase {
                        "closing the player must return the browser to portrait")
     }
 
+    /// YouTube's watch-next feed shows a floating row of filter chips ("All",
+    /// "From <channel>", "Related", "For you") while scrolling. It is separate
+    /// from the Home feed chip bar, so both must be removed by the app shell.
+    func testYouTubeRelatedChipBarsAreRemovedWithAppShell() async throws {
+        let web = WKWebView(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+        web.loadHTMLString("""
+        <html><head><meta name="viewport" content="width=device-width,initial-scale=1">
+        <style>body{margin:0}ytm-app,ytm-related-chip-cloud-renderer,.related-chips-slot-wrapper,
+        #filter-chip-bar,ytm-rich-item-renderer{display:block}.related-chips-slot-wrapper{height:52px}
+        #filter-chip-bar{height:48px}</style></head>
+        <body><ytm-app><div class="page-container">
+          <div class="related-chips-slot-wrapper"><ytm-related-chip-cloud-renderer class="chips-fixed-positioning chips-visible"><ytm-chip-cloud-renderer class="chip-bar">All From Morley Kert Related For you</ytm-chip-cloud-renderer></ytm-related-chip-cloud-renderer></div>
+          <div id="related-chips-sentinel" class="related-chips-sentinel"></div>
+          <div id="filter-chip-bar">All From Morley Kert Related For you</div>
+          <ytm-rich-item-renderer><a href="/watch?v=abc123">A related video</a></ytm-rich-item-renderer>
+        </div></ytm-app></body></html>
+        """, baseURL: URL(string: "https://m.youtube.com/watch?v=abc123")!)
+        for _ in 0..<100 {
+            if !web.isLoading { break }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        let scriptURL = try XCTUnwrap(Bundle(for: AppBrowserSession.self).url(forResource: "ClearViewApps", withExtension: "js"))
+        let source = try String(contentsOf: scriptURL, encoding: .utf8)
+        _ = try await web.evaluateJavaScript("""
+        var clearViewInitial={site:'youtube',appShell:true,active:true};
+        \(source)
+        window.__clearviewApps.update(clearViewInitial);
+        true;
+        """)
+        let display: (String) async throws -> String = { selector in
+            try await web.evaluateJavaScript("getComputedStyle(document.querySelector('\(selector)')).display") as! String
+        }
+        for selector in ["ytm-related-chip-cloud-renderer", ".related-chips-slot-wrapper",
+                         "#related-chips-sentinel", "#filter-chip-bar"] {
+            let value = try await display(selector)
+            XCTAssertEqual(value, "none", "\(selector) must disappear with the app shell")
+        }
+        let card = try await display("ytm-rich-item-renderer")
+        XCTAssertNotEqual(card, "none", "a related video must remain visible")
+        _ = try await web.evaluateJavaScript("window.__clearviewApps.update({site:'youtube',appShell:false,active:true});true")
+        for selector in ["ytm-related-chip-cloud-renderer", ".related-chips-slot-wrapper",
+                         "#related-chips-sentinel", "#filter-chip-bar"] {
+            let value = try await display(selector)
+            XCTAssertNotEqual(value, "none", "\(selector) must return when the app shell is disabled")
+        }
+    }
+
+    /// YouTube's home feed autoplay previews rewrite labels and counters inside
+    /// the playing card. Re-checking an already approved card would hide the
+    /// video for a native round trip, which looks like a black flicker.
+    func testApprovedFeedCardIsNotRehiddenWhenPreviewTextChanges() async throws {
+        let collector = MessageCollector()
+        let controller = WKUserContentController()
+        controller.add(collector, name: "appsFilter")
+        let configuration = WKWebViewConfiguration()
+        configuration.userContentController = controller
+        let web = WKWebView(frame: CGRect(x: 0, y: 0, width: 390, height: 844), configuration: configuration)
+        web.loadHTMLString("""
+        <html><head><meta name="viewport" content="width=device-width,initial-scale=1">
+        <style>body{margin:0}ytm-rich-item-renderer{display:block}</style></head>
+        <body><ytm-app><div class="page-container">
+          <ytm-rich-item-renderer id="card"><a href="/watch?v=abc123">Quiet video</a><span id="meta">1 view</span></ytm-rich-item-renderer>
+        </div></ytm-app></body></html>
+        """, baseURL: URL(string: "https://m.youtube.com/")!)
+        for _ in 0..<100 {
+            if !web.isLoading { break }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        let scriptURL = try XCTUnwrap(Bundle(for: AppBrowserSession.self).url(forResource: "ClearViewApps", withExtension: "js"))
+        let source = try String(contentsOf: scriptURL, encoding: .utf8)
+        _ = try await web.evaluateJavaScript("""
+        var clearViewInitial={site:'youtube',appShell:true,active:true};
+        \(source)
+        window.__clearviewApps.update(clearViewInitial);
+        true;
+        """)
+        var scan: [String: Any]?
+        for _ in 0..<100 {
+            scan = collector.bodies.first { ($0["kind"] as? String) == "scan" }
+            if scan != nil { break }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        let message = try XCTUnwrap(scan, "the card should be sent for its first verdict")
+        let document = try XCTUnwrap(message["document"] as? String)
+        let items = try XCTUnwrap(message["items"] as? [[String: Any]])
+        let replies: [[String: Any]] = items.compactMap { item in
+            guard let id = item["id"] as? String, let revision = item["revision"] as? Int else { return nil }
+            return ["id": id, "revision": revision, "blocked": false]
+        }
+        let replyData = try JSONSerialization.data(withJSONObject: replies)
+        let replyJSON = try XCTUnwrap(String(data: replyData, encoding: .utf8))
+        let tokenData = try JSONEncoder().encode(document)
+        let tokenJSON = try XCTUnwrap(String(data: tokenData, encoding: .utf8))
+        _ = try await web.evaluateJavaScript("window.__clearviewApps.resolve(\(replyJSON), \(tokenJSON));true")
+        let approved = try await web.evaluateJavaScript("!document.getElementById('card').hasAttribute('data-cv-review')") as? Bool
+        XCTAssertEqual(approved, true, "the native verdict must reveal the approved card")
+
+        _ = try await web.evaluateJavaScript("document.getElementById('meta').textContent='2 views';true")
+        try await Task.sleep(for: .milliseconds(600))
+        let stillVisible = try await web.evaluateJavaScript("""
+        (()=>{const card=document.getElementById('card');
+        return !card.hasAttribute('data-cv-review') && !card.hasAttribute('data-cv-hidden');})()
+        """) as? Bool
+        XCTAssertEqual(stillVisible, true, "changing only the preview metadata must not hide or re-review the card")
+    }
+
+}
+
+@MainActor
+private final class MessageCollector: NSObject, WKScriptMessageHandler {
+    var bodies: [[String: Any]] = []
+
+    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        if let body = message.body as? [String: Any] { bodies.append(body) }
+    }
 }

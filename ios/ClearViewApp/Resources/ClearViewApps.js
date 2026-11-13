@@ -30,6 +30,9 @@
   let timer;
   let sequence = 0;
   let lastPageState = '';
+  // Settings or a new route invalidate earlier verdicts. Feed playback alone
+  // must not, or a preview would be hidden and re-checked on every label tick.
+  let reviewEpoch = 0;
   const documentID = Math.random().toString(36).slice(2) + Date.now().toString(36);
   const tracked = new Map();
   const elementIDs = new WeakMap();
@@ -65,6 +68,9 @@
     return (visible + ' ' + labels).slice(0, max);
   };
   const pause = element => element.querySelectorAll('video,audio').forEach(media => media.pause());
+  const mark = (element, name, value = 'true') => {
+    if (element.getAttribute(name) !== value) element.setAttribute(name, value);
+  };
 
   const style = document.createElement('style');
   style.id = 'clearview-app-style';
@@ -105,6 +111,11 @@
     html[data-cv-app-shell="true"] ytm-mobile-topbar-renderer-v2,
     html[data-cv-app-shell="true"] ytm-feed-filter-chip-bar-renderer,
     html[data-cv-app-shell="true"] .feed-filter-chip-bar,
+    html[data-cv-app-shell="true"] ytm-related-chip-cloud-renderer,
+    html[data-cv-app-shell="true"] ytm-chip-cloud-renderer.chip-bar,
+    html[data-cv-app-shell="true"] .related-chips-slot-wrapper,
+    html[data-cv-app-shell="true"] #related-chips-sentinel,
+    html[data-cv-app-shell="true"] #filter-chip-bar,
     html[data-cv-app-shell="true"] ytd-masthead,
     html[data-cv-app-shell="true"] #masthead-container { display:none!important; }
     html[data-cv-app-shell="true"] ytm-app {
@@ -185,14 +196,20 @@
   function mount() {
     if (!document.documentElement) return;
     if (!style.isConnected) (document.head || document.documentElement).append(style);
-    document.documentElement.dataset.cvYoutubeHome = String(isYouTube && location.pathname === '/');
-    document.documentElement.dataset.cvDark = String(config.dark);
-    document.documentElement.dataset.cvService = String(usesDarkPalette);
-    document.documentElement.dataset.cvHideShorts = String(Boolean(shortSetting()));
-    document.documentElement.dataset.cvAppShell = String(Boolean(config.appShell) && isAppShell && !isAuthenticationPage());
-    document.documentElement.dataset.cvRemoveBlocked = String(config.removeBlockedCards !== false);
-    document.documentElement.dataset.cvHideGoogleCategories = String(isGoogle && config.hideGoogleCategories);
-    document.documentElement.dataset.cvBlockAds = String(isYouTube && config.blockAds);
+    const root = document.documentElement;
+    // Scans run continuously. Writing an attribute the page already has forces
+    // WebKit to restyle the whole document, which can drop a video frame.
+    const flag = (name, value) => {
+      if (root.dataset[name] !== value) root.dataset[name] = value;
+    };
+    flag('cvYoutubeHome', String(isYouTube && location.pathname === '/'));
+    flag('cvDark', String(config.dark));
+    flag('cvService', String(usesDarkPalette));
+    flag('cvHideShorts', String(Boolean(shortSetting())));
+    flag('cvAppShell', String(Boolean(config.appShell) && isAppShell && !isAuthenticationPage()));
+    flag('cvRemoveBlocked', String(config.removeBlockedCards !== false));
+    flag('cvHideGoogleCategories', String(isGoogle && config.hideGoogleCategories));
+    flag('cvBlockAds', String(isYouTube && config.blockAds));
   }
 
   // YouTube renders captions in HTML above the video. iOS's video-only
@@ -243,7 +260,7 @@
       detailCover?.remove();
       detailCover = null;
       send({kind:'route'});
-      tracked.forEach(value => { value.fingerprint = ''; });
+      reviewEpoch++;
     }
     const blocked = Boolean(shortSetting()) && shortPath(location.href);
     let cover = document.getElementById('clearview-short-route-cover');
@@ -293,10 +310,10 @@
           ? 'footer,[role="contentinfo"],[data-testid*="upsell"]'
           : 'nav,[role="navigation"],[role="banner"],footer,[role="contentinfo"]';
     document.querySelectorAll(selector).forEach(node => {
-      if (!node.closest('article,form,[role="dialog"]')) node.setAttribute('data-cv-web-chrome', 'true');
+      if (!node.closest('article,form,[role="dialog"]')) mark(node, 'data-cv-web-chrome');
     });
     if (!isYouTube && !isFacebook) document.querySelectorAll('header').forEach(node => {
-      if (!node.closest('main,article,form,[role="dialog"]')) node.setAttribute('data-cv-web-chrome', 'true');
+      if (!node.closest('main,article,form,[role="dialog"]')) mark(node, 'data-cv-web-chrome');
     });
     if (isYouTube && location.pathname === '/') {
       const app = document.querySelector('ytm-app');
@@ -305,7 +322,12 @@
         const previous = parseFloat(page.style.getPropertyValue('--cv-youtube-home-gap')) || 0;
         const gap = page.getBoundingClientRect().top - app.getBoundingClientRect().top + previous;
         // Only consume a small empty masthead slot, never a player or feed card.
-        if (gap >= 0 && gap <= 80) page.style.setProperty('--cv-youtube-home-gap', gap + 'px');
+        // Quantise so sub-pixel measurements do not rewrite the page margin on
+        // every scan while a muted preview is playing.
+        const rounded = Math.round(gap * 2) / 2;
+        if (rounded >= 0 && rounded <= 80 && Math.abs(rounded - previous) >= 0.5) {
+          page.style.setProperty('--cv-youtube-home-gap', rounded + 'px');
+        }
       }
     }
     if (isFacebook && !isAuthenticationPage()) {
@@ -323,7 +345,7 @@
             const rect = row.getBoundingClientRect();
             if (rect.height > 100 || row.querySelector('article,[role="article"],form,[role="tablist"]')) break;
             if (rect.width > innerWidth * 0.8 && rect.height >= 28) {
-              row.setAttribute('data-cv-web-chrome', 'true');
+              mark(row, 'data-cv-web-chrome');
               break;
             }
           }
@@ -452,9 +474,28 @@
     if (!isService) return;
     // Navigation is not necessarily an anchor: YouTube's pivot items often
     // contain buttons and Instagram also uses role=button controls.
-    document.querySelectorAll('[data-cv-short-nav]').forEach(node => node.removeAttribute('data-cv-short-nav'));
-    document.querySelectorAll('[data-cv-short-shelf]').forEach(node => node.removeAttribute('data-cv-short-shelf'));
+    if (!shortSetting()) {
+      document.querySelectorAll('[data-cv-short-nav],[data-cv-short-shelf]').forEach(node => {
+        node.removeAttribute('data-cv-short-nav');
+        node.removeAttribute('data-cv-short-shelf');
+      });
+      return;
+    }
     const selector = 'a[href],button[aria-label],button[title],[role="button"],[aria-label="Reels" i],[role="link"],[role="tab"],ytm-pivot-bar-item-renderer,ytm-pivot-bar-item-view-model,[tab-identifier],[data-tab-identifier]';
+    // Keep existing marks. Removing and re-adding them on every scan restyles
+    // the whole page while a feed preview is playing, which can flash black.
+    document.querySelectorAll('[data-cv-short-nav]').forEach(node => {
+      const controls = node.matches(selector) ? [node, ...node.querySelectorAll(selector)] : Array.from(node.querySelectorAll(selector));
+      if (!controls.some(control => shortControl(control))) node.removeAttribute('data-cv-short-nav');
+    });
+    document.querySelectorAll('[data-cv-short-shelf]').forEach(section => {
+      const hasShorts = section.querySelector('a[href^="/shorts"],ytm-shorts-lockup-view-model,ytm-shorts-lockup-view-model-v2,yt-shorts-lockup-view-model');
+      const heading = Array.from(section.querySelectorAll('h2,h3,[role="heading"],ytm-shelf-header-renderer'))
+        .find(node => /^shorts$/i.test((node.textContent || '').trim()));
+      if (!hasShorts && !heading && !section.querySelector('[aria-label="Shorts"]')) {
+        section.removeAttribute('data-cv-short-shelf');
+      }
+    });
     document.querySelectorAll(selector).forEach(element => {
       if (!shortControl(element)) return;
       let item = element.closest('ytm-pivot-bar-item-renderer,ytm-pivot-bar-item-view-model,[role="tab"],[role="menuitem"]') || element;
@@ -469,7 +510,7 @@
           item = parent;
         }
       }
-      item.setAttribute('data-cv-short-nav', 'true');
+      mark(item, 'data-cv-short-nav');
     });
     if (isFacebook) {
       // Facebook's mobile renderer overlaps each 50px tab with a negative top
@@ -502,11 +543,11 @@
             section = node;
           }
         }
-        if (section) section.setAttribute('data-cv-short-shelf', 'true');
+        if (section) mark(section, 'data-cv-short-shelf');
       });
       document.querySelectorAll(shelves).forEach(section => {
         const hasShorts = section.querySelector('a[href^="/shorts"],ytm-shorts-lockup-view-model,ytm-shorts-lockup-view-model-v2,yt-shorts-lockup-view-model');
-        if (hasShorts && !section.querySelector('a[href*="/watch?"]')) section.setAttribute('data-cv-short-shelf', 'true');
+        if (hasShorts && !section.querySelector('a[href*="/watch?"]')) mark(section, 'data-cv-short-shelf');
       });
     }
   }
@@ -589,12 +630,26 @@
     if (!id) { id = 'cv' + (++sequence); elementIDs.set(element, id); }
     const fingerprint = JSON.stringify(description);
     const previous = tracked.get(id);
-    if (previous?.fingerprint === fingerprint) return;
+    const stale = !previous || previous.epoch !== reviewEpoch;
+    if (previous?.fingerprint === fingerprint && !stale) return;
     const revision = (previous?.revision || 0) + 1;
-    tracked.set(id, {element, fingerprint, description, revision});
-    // Feed cards stay concealed until the native matcher returns a verdict.
-    if (!description.detail) element.setAttribute('data-cv-review', 'pending');
-    items.push({id, revision, text:description.text, creator:description.creator, url:description.url, short:description.short});
+    // A card whose verdict is already applied keeps its visibility when
+    // YouTube's autoplay preview changes a label or counter inside it. Hiding
+    // an approved card again for the native check makes the playing video
+    // flash black.
+    const reviewed = Boolean(previous) && previous.description.url === description.url
+      && !element.hasAttribute('data-cv-review');
+    tracked.set(id, {element, fingerprint, description, revision, epoch:reviewEpoch});
+    // Detail pages keep re-checking profile/metadata text as it loads.
+    if (description.detail) {
+      items.push({id, revision, text:description.text, creator:description.creator, url:description.url, short:description.short});
+      return;
+    }
+    if (!reviewed || stale) {
+      // Feed cards stay concealed until the native matcher returns a verdict.
+      element.setAttribute('data-cv-review', 'pending');
+      items.push({id, revision, text:description.text, creator:description.creator, url:description.url, short:description.short});
+    }
   }
 
   function scan() {
@@ -732,6 +787,7 @@
     update(next) {
       config = next;
       running = Boolean(next.active);
+      reviewEpoch++;
       tracked.forEach(entry => { entry.fingerprint = ''; });
       if (!running) pause(document);
       mount();
