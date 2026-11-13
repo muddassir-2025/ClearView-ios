@@ -143,11 +143,6 @@
     [data-cv-fullscreen-player="true"] video {
       width:100%!important;height:100%!important;left:0!important;top:0!important;object-fit:contain!important;
     }
-    #clearview-exit-fullscreen {
-      position:absolute;top:max(12px,env(safe-area-inset-top));right:max(12px,env(safe-area-inset-right));
-      z-index:2147483647;width:60px;height:44px;border:0;border-radius:50%;background:rgba(0,0,0,.65);
-      color:#fff;font:14px -apple-system,sans-serif;
-    }
     html[data-cv-app-shell="true"] ytm-rich-item-renderer { margin-inline:0!important; }
     html[data-cv-app-shell="true"] .media-item-thumbnail-container,
     html[data-cv-app-shell="true"] .video-thumbnail-container { border-radius:0!important; }
@@ -204,7 +199,6 @@
   // fullscreen drops that layer, so expand the complete player in this web view.
   let fullscreenPlayer = null;
   let fullscreenScroll = 0;
-  let exitFullscreenButton = null;
   function setPlayerFullscreen(enabled, player) {
     if (enabled && !fullscreenPlayer) {
       if (!player?.querySelector('video')) return;
@@ -212,19 +206,10 @@
       fullscreenPlayer = player;
       player.setAttribute('data-cv-fullscreen-player', 'true');
       document.documentElement.setAttribute('data-cv-player-fullscreen', 'true');
-      exitFullscreenButton = document.createElement('button');
-      exitFullscreenButton.id = 'clearview-exit-fullscreen';
-      exitFullscreenButton.type = 'button';
-      exitFullscreenButton.textContent = 'Done';
-      exitFullscreenButton.setAttribute('aria-label', 'Exit full screen');
-      exitFullscreenButton.addEventListener('click', () => setPlayerFullscreen(false));
-      player.append(exitFullscreenButton);
       send({kind:'playerFullscreen', enabled:true});
     } else if (!enabled && fullscreenPlayer) {
       fullscreenPlayer.removeAttribute('data-cv-fullscreen-player');
       document.documentElement.removeAttribute('data-cv-player-fullscreen');
-      exitFullscreenButton?.remove();
-      exitFullscreenButton = null;
       fullscreenPlayer = null;
       send({kind:'playerFullscreen', enabled:false});
       window.scrollTo(0, fullscreenScroll);
@@ -233,7 +218,7 @@
   document.addEventListener('click', event => {
     if (!isYouTube || !config.appShell || !running) return;
     const control = event.target.closest?.('button,[role="button"]');
-    if (!control || control.id === 'clearview-exit-fullscreen') return;
+    if (!control) return;
     const label = control.getAttribute('aria-label') || control.getAttribute('title') || '';
     if (!control.matches('.ytp-fullscreen-button,.fullscreen-button')
         && !/^(?:enter |exit )?full[ -]?screen(?:[ (]|$)/i.test(label)) return;

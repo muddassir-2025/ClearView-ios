@@ -150,8 +150,14 @@ final class AppBrowserSession: NSObject, WKNavigationDelegate, WKUIDelegate {
         invoke("window.__clearviewApps?.updateViewport(width, height)", arguments: ["width": size.width, "height": size.height])
     }
 
+    func setPlayerFullscreen(_ enabled: Bool) {
+        guard playerFullscreen != enabled else { return }
+        playerFullscreen = enabled
+        AppOrientation.set(fullscreen: enabled)
+    }
+
     func pause() {
-        playerFullscreen = false
+        setPlayerFullscreen(false)
         active = false
         finishDialog(nil)
         invoke("window.__clearviewApps?.pause()")
@@ -347,7 +353,7 @@ final class AppBrowserSession: NSObject, WKNavigationDelegate, WKUIDelegate {
         }
         if kind == "playerFullscreen" {
             guard AppSite.youtube.owns(url), let enabled = body["enabled"] as? Bool else { return }
-            playerFullscreen = enabled
+            setPlayerFullscreen(enabled)
             updatePlayerViewport(webView.bounds.size)
             return
         }
@@ -468,7 +474,7 @@ final class AppBrowserSession: NSObject, WKNavigationDelegate, WKUIDelegate {
     }
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
-        playerFullscreen = false
+        setPlayerFullscreen(false)
         isLoading = true
         navigationHidden = false
         showsIntentHome = false

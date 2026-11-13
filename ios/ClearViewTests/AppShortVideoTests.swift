@@ -1,4 +1,5 @@
 import XCTest
+import UIKit
 import WebKit
 @testable import ClearView
 
@@ -341,14 +342,17 @@ final class AppShortVideoTests: XCTestCase {
         (()=>{const p=document.getElementById('player').getBoundingClientRect();
         const c=document.querySelector('.captions').getBoundingClientRect();
         return p.width===390 && p.height===500 && c.top>=p.top && c.bottom<=p.bottom
-          && !window.videoOnlyFullscreen && !!document.getElementById('clearview-exit-fullscreen');})()
+          && !window.videoOnlyFullscreen
+          && document.documentElement.getAttribute('data-cv-player-fullscreen')==='true';})()
         """) as? Bool
         XCTAssertEqual(expanded, true, "fullscreen must include the HTML captions and intercept video-only fullscreen")
-        _ = try await web.evaluateJavaScript("document.getElementById('clearview-exit-fullscreen').click();true")
+        let noDoneButton = try await web.evaluateJavaScript("!document.getElementById('clearview-exit-fullscreen')") as? Bool
+        XCTAssertEqual(noDoneButton, true, "fullscreen must not add a separate Done button over YouTube's controls")
+        _ = try await web.evaluateJavaScript("document.querySelector('.ytp-fullscreen-button').click();true")
         let restored = try await web.evaluateJavaScript("!document.documentElement.hasAttribute('data-cv-player-fullscreen') && document.getElementById('player').getBoundingClientRect().height===window.playerInlineHeight") as? Bool
-        XCTAssertEqual(restored, true)
+        XCTAssertEqual(restored, true, "YouTube's own fullscreen control must close the expanded player")
         _ = try await web.evaluateJavaScript("document.querySelector('.ytp-fullscreen-button').click();window.__clearviewApps.pause();true")
-        let paused = try await web.evaluateJavaScript("!document.getElementById('clearview-exit-fullscreen')") as? Bool
+        let paused = try await web.evaluateJavaScript("!document.documentElement.hasAttribute('data-cv-player-fullscreen')") as? Bool
         XCTAssertEqual(paused, true, "leaving the app must exit the expanded player")
     }
 
@@ -383,6 +387,13 @@ final class AppShortVideoTests: XCTestCase {
         _ = try await web.evaluateJavaScript("window.__clearviewApps.update({site:'youtube',appShell:true,active:true});true")
         let reapplied = try await web.evaluateJavaScript("document.querySelector('.player-container').getBoundingClientRect().top") as! Double
         XCTAssertEqual(reapplied, 0, accuracy: 0.5, "re-enabling the app shell must consume the slot again")
+    }
+
+    func testPlayerFullscreenUsesLandscapeAndReturnsToPortrait() {
+        XCTAssertEqual(AppOrientation.mask(fullscreen: true), .landscape,
+                       "fullscreen must allow both landscape directions, never portrait")
+        XCTAssertEqual(AppOrientation.mask(fullscreen: false), .portrait,
+                       "closing the player must return the browser to portrait")
     }
 
 }
