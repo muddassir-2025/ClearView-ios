@@ -352,4 +352,37 @@ final class AppShortVideoTests: XCTestCase {
         XCTAssertEqual(paused, true, "leaving the app must exit the expanded player")
     }
 
+    func testYouTubeWatchPlayerConsumesReservedTopbarSlot() async throws {
+        let web = WKWebView(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+        web.loadHTMLString("""
+        <html><head><meta name="viewport" content="width=device-width,initial-scale=1">
+        <style>body{margin:0}ytm-app{display:block;padding-top:48px}
+        .player-container{position:absolute;top:48px;left:0;right:0}
+        #player{width:390px;height:220px;background:black}</style></head>
+        <body><ytm-app><div class="page-container"><div class="player-container">
+        <div id="player" class="html5-video-player"><div class="html5-video-container"><video playsinline></video></div></div>
+        </div></div></ytm-app></body></html>
+        """, baseURL: URL(string: "https://m.youtube.com/watch?v=abc123")!)
+        for _ in 0..<100 {
+            if !web.isLoading { break }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        let scriptURL = try XCTUnwrap(Bundle(for: AppBrowserSession.self).url(forResource: "ClearViewApps", withExtension: "js"))
+        let source = try String(contentsOf: scriptURL, encoding: .utf8)
+        _ = try await web.evaluateJavaScript("""
+        var clearViewInitial={site:'youtube',appShell:true,active:true};
+        \(source)
+        window.__clearviewApps.update(clearViewInitial);
+        true;
+        """)
+        let playerTop = try await web.evaluateJavaScript("document.querySelector('.player-container').getBoundingClientRect().top") as! Double
+        XCTAssertEqual(playerTop, 0, accuracy: 0.5, "the native header must replace YouTube's 48px watch-page topbar slot")
+        _ = try await web.evaluateJavaScript("window.__clearviewApps.update({site:'youtube',appShell:false,active:true});true")
+        let restored = try await web.evaluateJavaScript("document.querySelector('.player-container').getBoundingClientRect().top") as! Double
+        XCTAssertEqual(restored, 48, accuracy: 0.5, "disabling the app shell must restore YouTube's own topbar spacing")
+        _ = try await web.evaluateJavaScript("window.__clearviewApps.update({site:'youtube',appShell:true,active:true});true")
+        let reapplied = try await web.evaluateJavaScript("document.querySelector('.player-container').getBoundingClientRect().top") as! Double
+        XCTAssertEqual(reapplied, 0, accuracy: 0.5, "re-enabling the app shell must consume the slot again")
+    }
+
 }

@@ -115,6 +115,12 @@
     html[data-cv-app-shell="true"][data-cv-youtube-home="true"] ytm-app > .page-container {
       margin-top:calc(-1 * var(--cv-youtube-home-gap,0px))!important;
     }
+    /* Watch pages reserve YouTube's 48px mobile topbar above the player. The
+       native header already fills that slot, so keep the player at the top. */
+    html[data-cv-app-shell="true"] .player-container,
+    html[data-cv-app-shell="true"] .player-container.sticky-player {
+      top:0!important;
+    }
     html[data-cv-player-fullscreen="true"], html[data-cv-player-fullscreen="true"] body { overflow:hidden!important; }
     html[data-cv-player-fullscreen="true"] [data-cv-fullscreen-player="true"] {
       position:fixed!important;inset:0!important;width:var(--cv-player-width,100vw)!important;height:var(--cv-player-height,100dvh)!important;
