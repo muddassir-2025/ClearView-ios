@@ -4,23 +4,40 @@
   const host = location.hostname;
   const isYouTube = host === 'youtube.com' || host.endsWith('.youtube.com');
   const isInstagram = host === 'instagram.com' || host.endsWith('.instagram.com');
+  const isSnapchat = host === 'snapchat.com' || host.endsWith('.snapchat.com');
+  const isFacebook = host === 'facebook.com' || host.endsWith('.facebook.com');
   const isGoogle = /^(?:www\.|m\.)?google\.[a-z]{2,}(?:\.[a-z]{2,})?$/.test(host);
-  const isService = isYouTube || isInstagram;
-  const domain = isYouTube ? 'youtube.com' : isInstagram ? 'instagram.com' : host;
+  const isService = isYouTube || isInstagram || isSnapchat || isFacebook;
+  // Services use ClearView’s header; Facebook keeps its own navigation row.
+  // Only YouTube and Instagram opt into ClearView's dark palette; Snapchat and
+  // Facebook keep their own colours.
+  const isAppShell = isService;
+  const usesDarkPalette = isYouTube || isInstagram;
+  const domain = isYouTube ? 'youtube.com' : isInstagram ? 'instagram.com'
+    : isSnapchat ? 'snapchat.com' : isFacebook ? 'facebook.com' : host;
   if (location.protocol !== 'https:') return;
   let config = clearViewInitial;
+  // Each app names its vertical feed differently and has its own switch.
+  const shortSetting = () => isYouTube ? config.blockShorts
+    : isInstagram ? config.blockReels
+    : isSnapchat ? config.blockSpotlight
+    : isFacebook ? config.blockFacebookReels : false;
+  const shortName = () => isYouTube ? 'Shorts' : isSnapchat ? 'Spotlight' : 'Reels';
   let running = false;
   let lastURL = '';
+  let lastBackground = '';
+  let lastChromeSweep = 0;
   let timer;
   let sequence = 0;
   let lastPageState = '';
   const documentID = Math.random().toString(36).slice(2) + Date.now().toString(36);
   const tracked = new Map();
   const elementIDs = new WeakMap();
-  const home = isYouTube ? 'https://m.youtube.com/' : isInstagram ? 'https://www.instagram.com/' : 'https://www.google.com/';
+  const home = isYouTube ? 'https://m.youtube.com/' : isInstagram ? 'https://www.instagram.com/'
+    : isSnapchat ? 'https://www.snapchat.com/discover' : isFacebook ? 'https://m.facebook.com/' : 'https://www.google.com/';
   const cardSelector = isYouTube
     ? 'ytm-rich-item-renderer,ytm-video-with-context-renderer,ytm-video-renderer,ytm-compact-video-renderer,ytm-grid-video-renderer,ytm-reel-item-renderer,ytm-shorts-lockup-view-model,ytm-shorts-lockup-view-model-v2,yt-shorts-lockup-view-model,ytd-rich-item-renderer,ytd-video-renderer,ytd-compact-video-renderer,ytd-reel-item-renderer,ytm-reel-video-renderer,ytd-reel-video-renderer'
-    : 'article,[role="listitem"]';
+    : '[role="article"],article,[role="listitem"]';
   const send = payload => {
     try { window.webkit.messageHandlers.appsFilter.postMessage(payload); } catch (_) { /* Navigation can detach a frame. */ }
   };
@@ -28,7 +45,12 @@
     try {
       const url = new URL(value, location.href);
       if (!isService || (url.hostname !== domain && !url.hostname.endsWith('.' + domain))) return false;
-      return isYouTube ? /^\/shorts(?:\/|$)/i.test(url.pathname) : /^\/reels?(?:\/|$)/i.test(url.pathname);
+      const path = url.pathname.toLowerCase();
+      if (isYouTube) return /^\/shorts(?:\/|$)/.test(path);
+      if (isInstagram) return /^\/reels?(?:\/|$)/.test(path);
+      if (isSnapchat) return /^(?:\/web)?\/spotlight(?:\/|$)/.test(path);
+      // Facebook's share sheet produces /share/reel/<id> and /share/r/<id> links.
+      return /^\/(?:reels?|share\/reel|share\/r)(?:\/|$)/.test(path);
     } catch (_) { return false; }
   };
   const isAuthenticationPage = () => /^\/(accounts|signin|login|challenge|consent|checkpoint)(?:\/|$)/i.test(location.pathname);
@@ -75,6 +97,7 @@
     html[data-cv-block-ads="true"] .video-ads,
     html[data-cv-block-ads="true"] .ytp-ad-overlay-container { display:none!important; }
     [data-cv-review="pending"] { visibility:hidden!important; }
+    [data-cv-app-prompt="true"] { display:none!important; }
     html[data-cv-app-shell="true"] [data-cv-web-chrome="true"],
     html[data-cv-app-shell="true"] ytm-pivot-bar-renderer,
     html[data-cv-app-shell="true"] ytm-pivot-bar-view-model,
@@ -92,12 +115,22 @@
     html[data-cv-app-shell="true"] ytm-rich-item-renderer { margin-inline:0!important; }
     html[data-cv-app-shell="true"] .media-item-thumbnail-container,
     html[data-cv-app-shell="true"] .video-thumbnail-container { border-radius:0!important; }
+    html[data-cv-hide-shorts="true"] [data-cv-facebook-tabs="true"] {
+      background:#fff!important;
+    }
+    html[data-cv-hide-shorts="true"] [data-cv-facebook-tabs="true"] > [role="tab"] {
+      margin-left:var(--cv-tab-left)!important;
+    }
     html[data-cv-hide-shorts="true"] [data-cv-short-nav="true"],
     html[data-cv-hide-shorts="true"] [data-cv-short-shelf="true"],
     html[data-cv-hide-shorts="true"] ytm-pivot-bar-item-renderer:has([aria-label="Shorts"]),
     html[data-cv-hide-shorts="true"] a[href^="/shorts"],
     html[data-cv-hide-shorts="true"] a[href^="/reel/"],
-    html[data-cv-hide-shorts="true"] a[href^="/reels/"] { display:none!important; }
+    html[data-cv-hide-shorts="true"] a[href^="/reels/"],
+    html[data-cv-hide-shorts="true"] a[href^="/spotlight"],
+    html[data-cv-hide-shorts="true"] a[href*="/spotlight"],
+    html[data-cv-hide-shorts="true"] a[href^="/share/reel/"],
+    html[data-cv-hide-shorts="true"] a[href^="/share/r/"] { display:none!important; }
     html[data-cv-hide-shorts="true"] ytm-reel-shelf-renderer,
     html[data-cv-hide-shorts="true"] ytd-reel-shelf-renderer,
     html[data-cv-hide-shorts="true"] ytm-shorts-lockup-view-model,
@@ -106,7 +139,7 @@
     html[data-cv-hide-shorts="true"] ytm-reel-item-renderer,
     html[data-cv-hide-shorts="true"] ytd-reel-item-renderer { display:none!important; }
     ytm-app-promo-renderer,ytm-open-app-banner-renderer,ytm-mobile-app-promo-renderer { display:none!important; }
-    a[href*="apps.apple.com/app/"],a[href*="play.google.com/store/apps/"] { display:none!important; }
+    a[href*="apps.apple.com"],a[href*="itunes.apple.com"],a[href*="play.google.com/store/apps"] { display:none!important; }
     #clearview-route-cover,#clearview-short-route-cover {
       position:fixed;inset:0;z-index:2147483647;background:#0f1514;color:#dde4e3;
       display:flex;flex-direction:column;align-items:center;justify-content:center;
@@ -122,9 +155,9 @@
     if (!document.documentElement) return;
     if (!style.isConnected) (document.head || document.documentElement).append(style);
     document.documentElement.dataset.cvDark = String(config.dark);
-    document.documentElement.dataset.cvService = String(isService);
-    document.documentElement.dataset.cvHideShorts = String(isYouTube ? config.blockShorts : isInstagram ? config.blockReels : false);
-    document.documentElement.dataset.cvAppShell = String(Boolean(config.appShell) && isService && !isAuthenticationPage());
+    document.documentElement.dataset.cvService = String(usesDarkPalette);
+    document.documentElement.dataset.cvHideShorts = String(Boolean(shortSetting()));
+    document.documentElement.dataset.cvAppShell = String(Boolean(config.appShell) && isAppShell && !isAuthenticationPage());
     document.documentElement.dataset.cvRemoveBlocked = String(config.removeBlockedCards !== false);
     document.documentElement.dataset.cvHideGoogleCategories = String(isGoogle && config.hideGoogleCategories);
     document.documentElement.dataset.cvBlockAds = String(isYouTube && config.blockAds);
@@ -133,12 +166,13 @@
   function route() {
     if (lastURL !== location.href) {
       lastURL = location.href;
+      lastChromeSweep = 0;
       detailCover?.remove();
       detailCover = null;
       send({kind:'route'});
       tracked.forEach(value => { value.fingerprint = ''; });
     }
-    const blocked = (isYouTube ? config.blockShorts : isInstagram ? config.blockReels : false) && shortPath(location.href);
+    const blocked = Boolean(shortSetting()) && shortPath(location.href);
     let cover = document.getElementById('clearview-short-route-cover');
     if (blocked) {
       pause(document);
@@ -147,7 +181,7 @@
         cover.id = 'clearview-short-route-cover';
         cover.setAttribute('role', 'status');
         const heading = document.createElement('h2');
-        heading.textContent = (isYouTube ? 'Shorts' : 'Reels') + ' are hidden';
+        heading.textContent = shortName() === 'Spotlight' ? 'Spotlight is hidden' : shortName() + ' are hidden';
         const detail = document.createElement('p');
         detail.textContent = 'Your setting keeps short videos out of this app. You can change it with the shield button.';
         const link = document.createElement('a');
@@ -159,27 +193,176 @@
     } else if (cover) cover.remove();
   }
 
+  /// Report the page's real background so the native strip under the home
+  /// indicator blends into the page rather than looking like a second bar.
+  function reportBackground() {
+    if (!document.body) return;
+    const body = getComputedStyle(document.body).backgroundColor;
+    const root = getComputedStyle(document.documentElement).backgroundColor;
+    const transparent = value => !value || value === 'rgba(0, 0, 0, 0)' || value === 'transparent';
+    const value = !transparent(body) ? body : !transparent(root) ? root : (config.dark ? 'rgb(15, 21, 20)' : 'rgb(255, 255, 255)');
+    if (value === lastBackground) return;
+    lastBackground = value;
+    const match = value.match(/rgba?\(([^)]+)\)/);
+    if (!match) return;
+    const parts = match[1].split(',').map(part => parseFloat(part));
+    if (parts.length < 3 || parts.some(Number.isNaN)) return;
+    send({kind:'background', r:parts[0], g:parts[1], b:parts[2], a:parts[3] ?? 1});
+  }
+
   function markAppChrome() {
-    if (!isService) return;
+    if (!isAppShell || !config.appShell) return;
     const selector = isYouTube
       ? 'ytm-pivot-bar-renderer,ytm-pivot-bar-view-model,ytm-mobile-topbar-renderer,ytm-mobile-topbar-renderer-v2,ytd-masthead,#masthead-container'
-      : 'nav,[role="navigation"],[role="banner"]';
+      : isSnapchat
+        ? 'header,nav,[role="navigation"],[role="banner"],[data-testid="mobile-nav-top"],[class*="MobileNavigation_mobileNavContainer"],[class*="MobileHeader_headerWrapper"],[class*="MobileGhostIconCTABanner"]'
+        : isFacebook
+          ? 'footer,[role="contentinfo"],[data-testid*="upsell"]'
+          : 'nav,[role="navigation"],[role="banner"],footer,[role="contentinfo"]';
     document.querySelectorAll(selector).forEach(node => {
       if (!node.closest('article,form,[role="dialog"]')) node.setAttribute('data-cv-web-chrome', 'true');
     });
-    if (!isYouTube) document.querySelectorAll('header').forEach(node => {
+    if (!isYouTube && !isFacebook) document.querySelectorAll('header').forEach(node => {
       if (!node.closest('main,article,form,[role="dialog"]')) node.setAttribute('data-cv-web-chrome', 'true');
     });
+    if (isFacebook && !isAuthenticationPage()) {
+      // Keep Facebook's real navigation (friends, messages, notifications,
+      // marketplace). Only replace the wordmark/search/menu row with our header.
+      const now = Date.now();
+      if (now - lastChromeSweep > 1000) {
+        lastChromeSweep = now;
+        document.querySelectorAll('a[href], [aria-label^="Facebook" i], [role="banner"]').forEach(logo => {
+          if (logo.closest('article,[role="article"],form,[role="dialog"]')) return;
+          const label = (logo.getAttribute('aria-label') || logo.textContent || '').trim();
+          if (!/^facebook(?: logo)?$/i.test(label) && !logo.querySelector('svg[aria-label^="Facebook" i],img[alt^="Facebook" i]')) return;
+          let row = logo;
+          for (let depth = 0; row && depth < 5 && row !== document.body; depth++, row = row.parentElement) {
+            const rect = row.getBoundingClientRect();
+            if (rect.height > 100 || row.querySelector('article,[role="article"],form,[role="tablist"]')) break;
+            if (rect.width > innerWidth * 0.8 && rect.height >= 28) {
+              row.setAttribute('data-cv-web-chrome', 'true');
+              break;
+            }
+          }
+        });
+      }
+    }
+  }
+
+  /// Snapchat and Facebook put "open the app" / "download the app" prompts in the
+  /// middle of their web pages. Those are website chrome, not content: mark them
+  /// so the app-shell CSS removes them, including the text-only banners that have
+  /// no stable class name.
+  function markAppPrompt(element) {
+    // Ascend before hiding the leaf, while its container still has geometry.
+    // Never remove a feed, login form, or modal to get rid of a small banner.
+    let candidate = element.closest('a,button,[role="button"]') || element;
+    for (let parent = candidate.parentElement, depth = 0;
+         parent && parent !== document.body && depth < 8; depth++, parent = parent.parentElement) {
+      if (parent.matches('main,article,[role="main"],[role="article"],[role="dialog"],form')
+          || parent.querySelector('article,[role="article"],form,input,textarea,video')) break;
+      const rect = parent.getBoundingClientRect();
+      if (rect.height > 160) break;
+      const position = getComputedStyle(parent).position;
+      if ((position === 'fixed' || position === 'sticky') && rect.width > innerWidth * 0.7) {
+        candidate = parent;
+        break;
+      }
+    }
+    candidate.setAttribute('data-cv-app-prompt', 'true');
+  }
+
+  function hideAppPrompts() {
+    if (!isSnapchat && !isFacebook) return;
+    if (!document.body) return;
+    // Keep previously identified containers marked: their hidden children no
+    // longer have measurable geometry on subsequent scans.
+    let selector = 'a[href*="apps.apple.com"],a[href*="itunes.apple.com"],a[href*="play.google.com/store/apps"],a[href^="snapchat://"],a[href^="fb://"],'
+      + '[data-testid*="open-app" i],[data-testid*="app-download" i],[data-testid*="appDownload"],[data-testid*="app-promo" i],'
+      + '[data-sigil*="app-download" i],[data-sigil*="download-banner" i],[class*="appDownload"],[class*="AppDownload"]';
+    if (isSnapchat) {
+      selector += ',a[href*="click.snapchat.com"],a[href*="link.snapchat.com"],a[href*="snapchat.com/download"],'
+        + '[class*="MobileGhostIconCTABanner"],[class*="MobileHeader_headerWrapper"],[class*="MobileHeader_mobileInstallButton"],'
+        + '[class*="HomepageContent_mobileDownloadSnapchat"],[class*="HomepageContent_landingScreen"],'
+        + '[class*="HomepageContent_heroContent"],[data-testid="ConsumerNav_DownloadButton"]';
+    }
+    document.querySelectorAll(selector).forEach(node => {
+      markAppPrompt(node);
+    });
+    const patterns = isSnapchat
+      ? [/^open snapchat$/i, /^install$/i, /^download$/i, /^download snapchat$/i,
+         /^download to try the most popular/i, /^open in app$/i,
+         /^snapchat is better on the app$/i, /^snapchat app$/i, /^open in snapchat$/i,
+         /^browser continue$/i]
+      : [/^get facebook for ios and browse faster\.?$/i, /^open in app$/i, /^open app$/i,
+         /^open in facebook$/i, /^open facebook$/i, /^open the app$/i, /^open in the app$/i,
+         /^continue in app$/i, /^use the app$/i, /^get the app$/i, /^download the app$/i];
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    let node;
+    while ((node = walker.nextNode())) {
+      const value = (node.textContent || '').trim();
+      if (!value || value.length > 140 || !patterns.some(pattern => pattern.test(value))) continue;
+      let element = node.parentElement;
+      for (let depth = 0; element && depth < 5; depth++, element = element.parentElement) {
+        const tag = element.tagName.toLowerCase();
+        if (tag === 'a' || tag === 'button' || element.getAttribute('role') === 'button' || tag === 'header') {
+          markAppPrompt(element);
+          break;
+        }
+        if (depth >= 2 && element.textContent.trim().length <= 200) {
+          markAppPrompt(element);
+          break;
+        }
+      }
+    }
+    // Catch icon-only app launch controls too. Facebook can leave their
+    // blue button visible after an app-store link or text child is removed.
+    if (isFacebook && !isAuthenticationPage()) {
+      document.querySelectorAll('a,button,[role="button"]').forEach(control => {
+        const label = control.getAttribute('aria-label') || control.getAttribute('title') || '';
+        if (/^(?:open|use|continue in|download|get|install)(?: the)? (?:facebook|app)/i.test(label)) markAppPrompt(control);
+      });
+    }
+    if (isFacebook) {
+      // The login page's footer is plain links with no landmark role. Remove the
+      // "Meta / About Help More" strip so the app navigation is the last bar.
+      document.querySelectorAll('div,section,footer').forEach(element => {
+        const value = (element.textContent || '').replace(/\s+/g, ' ').trim();
+        if (value.length <= 40 && value.endsWith('About Help More') && !element.querySelector('input,form')) {
+          element.setAttribute('data-cv-app-prompt', 'true');
+        }
+        const labels = Array.from(element.children)
+          .map(child => (child.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase())
+          .filter(Boolean);
+        if (labels.filter(label => ['about', 'help', 'more'].includes(label)).length >= 2) {
+          element.setAttribute('data-cv-app-prompt', 'true');
+        }
+      });
+    }
   }
 
   function shortControl(element) {
     const href = element.getAttribute('href') || element.getAttribute('data-href');
     if (href && shortPath(href)) return true;
+    // Facebook's top video tab is labelled Watch/Videos and uses /watch,
+    // /video or a tab query instead of /reels. Hide that entry when Reels are
+    // disabled, while leaving ordinary video links inside posts intact.
+    if (isFacebook && !element.closest('article,[role="article"],form,[role="dialog"]')) {
+      try {
+        const url = new URL(href || '', location.href);
+        if ((url.hostname === domain || url.hostname.endsWith('.' + domain))
+            && (/^\/(?:watch|videos?)\/?$/.test(url.pathname)
+              || /^(?:watch|videos?|reels)$/.test(url.searchParams.get('tab') || ''))) return true;
+      } catch (_) { /* A control without a URL can still carry an accessible label. */ }
+      const labels = [element, ...element.querySelectorAll('[aria-label],[title],img[alt]')]
+        .map(node => node.getAttribute('aria-label') || node.getAttribute('title') || node.getAttribute('alt') || '').join(' ');
+      if (/^(?:reels|watch|videos?)(?=[\s,.:;!?]|$)/i.test(labels.trim())) return true;
+    }
     const label = element.getAttribute('aria-label') || element.getAttribute('title') || '';
-    if (/^(?:shorts|reels)(?:\s|$)/i.test(label.trim())) return true;
+    if (/^(?:shorts|reels|spotlight)(?=[\s,.:;!?]|$)/i.test(label.trim())) return true;
     const tab = element.getAttribute('tab-identifier') || element.getAttribute('data-tab-identifier') || '';
-    if (/(?:shorts|reels)/i.test(tab)) return true;
-    return /^(?:shorts|reels)$/i.test((element.textContent || '').trim());
+    if (/(?:shorts|reels|spotlight)/i.test(tab)) return true;
+    return /^(?:shorts|reels|spotlight)$/i.test((element.textContent || '').trim());
   }
 
   function hideShortLinks() {
@@ -188,12 +371,40 @@
     // contain buttons and Instagram also uses role=button controls.
     document.querySelectorAll('[data-cv-short-nav]').forEach(node => node.removeAttribute('data-cv-short-nav'));
     document.querySelectorAll('[data-cv-short-shelf]').forEach(node => node.removeAttribute('data-cv-short-shelf'));
-    const selector = 'a[href],button[aria-label],button[title],[role="button"][aria-label],[role="tab"],ytm-pivot-bar-item-renderer,ytm-pivot-bar-item-view-model,[tab-identifier],[data-tab-identifier]';
+    const selector = 'a[href],button[aria-label],button[title],[role="button"],[aria-label="Reels" i],[role="link"],[role="tab"],ytm-pivot-bar-item-renderer,ytm-pivot-bar-item-view-model,[tab-identifier],[data-tab-identifier]';
     document.querySelectorAll(selector).forEach(element => {
       if (!shortControl(element)) return;
-      const item = element.closest('ytm-pivot-bar-item-renderer,ytm-pivot-bar-item-view-model,[role="tab"],[role="menuitem"]');
-      (item || element).setAttribute('data-cv-short-nav', 'true');
+      let item = element.closest('ytm-pivot-bar-item-renderer,ytm-pivot-bar-item-view-model,[role="tab"],[role="menuitem"]') || element;
+      if (isFacebook && !element.closest('article,[role="article"],form,[role="dialog"]')) {
+        // Facebook wraps each icon button in a separate painted tab cell.
+        // Remove the cell as well, rather than leaving its grey background.
+        for (let parent = item.parentElement, depth = 0; parent && depth < 5; depth++, parent = parent.parentElement) {
+          const rect = parent.getBoundingClientRect();
+          if (rect.width < 16 || rect.width > innerWidth * 0.28 || rect.height > 88
+              || parent.matches('nav,header,[role="navigation"],[role="tablist"]')
+              || parent.querySelectorAll('a[href],button,[role="button"],[role="tab"]').length > 1) break;
+          item = parent;
+        }
+      }
+      item.setAttribute('data-cv-short-nav', 'true');
     });
+    if (isFacebook) {
+      // Facebook's mobile renderer overlaps each 50px tab with a negative top
+      // margin. Keep that vertical layout and only redistribute horizontal slots.
+      document.querySelectorAll('[role="tablist"]').forEach(row => {
+        const tabs = Array.from(row.children);
+        if (tabs.length < 3 || !tabs.every(tab => tab.matches('[role="tab"]'))
+            || !tabs.some(tab => tab.hasAttribute('data-cv-short-nav'))) return;
+        row.setAttribute('data-cv-facebook-tabs', 'true');
+        const visible = tabs.filter(tab => !tab.hasAttribute('data-cv-short-nav'));
+        const step = row.getBoundingClientRect().width / visible.length;
+        if (!Number.isFinite(step) || step <= 0) return;
+        visible.forEach((tab, index) => {
+          const left = index * step + (step - tab.getBoundingClientRect().width) / 2;
+          tab.style.setProperty('--cv-tab-left', left + 'px');
+        });
+      });
+    }
     if (isYouTube) {
       // Newer shelves can use a rich-section wrapper instead of reel-shelf.
       // Remove the whole shelf, including its heading and layout space.
@@ -264,18 +475,29 @@
   function describe(element, detail = false) {
     const links = Array.from(element.querySelectorAll('a[href]'));
     if (element.matches('a[href]')) links.unshift(element);
-    const link = links.find(anchor => isYouTube
-      ? /\/(watch|shorts|live)(?:[/?]|$)/.test(anchor.getAttribute('href') || '')
-      : isInstagram ? /\/(p|reels?)\//.test(anchor.getAttribute('href') || '') : true);
-    const creatorLink = links.find(anchor => isYouTube
-      ? /\/(?:@|channel\/|c\/)/.test(anchor.getAttribute('href') || '')
-      : /^\/[a-zA-Z0-9_.]+\/?$/.test(anchor.getAttribute('href') || ''));
+    const link = links.find(anchor => {
+      const href = anchor.getAttribute('href') || '';
+      if (isYouTube) return /\/(watch|shorts|live)(?:[/?]|$)/.test(href);
+      if (isInstagram) return /\/(p|reels?)\//.test(href);
+      if (isSnapchat) return /^\/spotlight\//.test(href) || /^\/@/.test(href);
+      if (isFacebook) return /\/(?:reel|reels|videos?|watch|stories?)\//.test(href);
+      return true;
+    });
+    const creatorLink = links.find(anchor => {
+      const href = anchor.getAttribute('href') || '';
+      if (isYouTube) return /\/(?:@|channel\/|c\/)/.test(href);
+      if (isInstagram) return /^\/[a-zA-Z0-9_.]+\/?$/.test(href);
+      if (isSnapchat) return /^\/@[a-zA-Z0-9_.-]+\/?$/.test(href);
+      if (isFacebook) return /^\/[a-zA-Z0-9.]+\/?$/.test(href)
+        && !/^\/(?:reel|reels|watch|share|stories|login|signup)\/?$/i.test(href);
+      return true;
+    });
     const href = detail ? location.href : link?.href || '';
     const title = detail && isYouTube
       ? text(document.querySelector('ytm-slim-video-metadata-renderer,ytm-watch-metadata,ytm-video-description-header-renderer,#above-the-fold'), 4500) || document.title
       : text(element);
     return {text:title, creator:creatorLink?.textContent?.trim().slice(0, 200) || '', url:href,
-      short:shortPath(href) || /reel|shorts/.test(element.tagName.toLowerCase()), detail};
+      short:shortPath(href) || /reel|shorts|spotlight/.test(element.tagName.toLowerCase()), detail};
   }
 
   function queue(element, description, items) {
@@ -298,6 +520,8 @@
     mount();
     route();
     markAppChrome();
+    hideAppPrompts();
+    reportBackground();
     hideShortLinks();
     filterGoogleCategories();
     skipVideoAds();
@@ -429,12 +653,21 @@
       mount();
       route();
       markAppChrome();
+      hideAppPrompts();
       hideShortLinks();
       filterGoogleCategories();
       skipVideoAds();
       schedule();
     },
     resolve,
+    openSiteMenu() {
+      if (!isFacebook) return false;
+      const control = document.querySelector('[aria-label="Facebook Menu" i]');
+      const button = control?.closest('a,button,[role="button"]') || control;
+      if (!button) return false;
+      button.click();
+      return true;
+    },
     openProfile() {
       const direct = document.querySelector('nav [aria-label="Profile"],[role="navigation"] [aria-label="Profile"],[data-cv-web-chrome] [aria-label="Profile"]');
       const control = direct?.closest('a,button,[role="button"]');
@@ -465,7 +698,7 @@
   document.addEventListener('click', event => {
     const anchor = event.target.closest?.('a[href]');
     const control = event.target.closest?.('button,[role="button"],[role="tab"],ytm-pivot-bar-item-renderer,ytm-pivot-bar-item-view-model');
-    const blocksShorts = isYouTube ? config.blockShorts : isInstagram ? config.blockReels : false;
+    const blocksShorts = Boolean(shortSetting());
     if (blocksShorts && ((anchor && shortPath(anchor.href)) || (control && shortControl(control)))) {
       event.preventDefault(); event.stopImmediatePropagation();
     }
@@ -481,7 +714,7 @@
     send({kind:'whitespaceTap', url:location.href});
   }, true);
   document.addEventListener('play', event => {
-    if (!running || ((isYouTube ? config.blockShorts : config.blockReels) && shortPath(location.href)) || detailCover?.isConnected
+    if (!running || (shortSetting() && shortPath(location.href)) || detailCover?.isConnected
         || event.target.closest?.('[data-cv-hidden="true"],[data-cv-review="pending"]')) event.target.pause?.();
   }, true);
   document.addEventListener('visibilitychange', () => { if (document.hidden) pause(document); });

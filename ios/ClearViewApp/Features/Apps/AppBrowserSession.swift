@@ -20,6 +20,9 @@ final class AppBrowserSession: NSObject, WKNavigationDelegate, WKUIDelegate {
     var showsIntentHome = false
     var navigationHidden = false
     var protectionNotice: String?
+    /// The page's own background, so the home-indicator strip blends into the
+    /// page instead of showing a second bar under it.
+    var pageBackground = UIColor.cvBackground
 
     @ObservationIgnored private weak var library: AppsLibrary?
     @ObservationIgnored private(set) var webView: WKWebView!
@@ -66,7 +69,7 @@ final class AppBrowserSession: NSObject, WKNavigationDelegate, WKUIDelegate {
         webView.isOpaque = false
         webView.backgroundColor = .cvBackground
         webView.scrollView.backgroundColor = .cvBackground
-        webView.scrollView.contentInsetAdjustmentBehavior = .never
+        webView.scrollView.contentInsetAdjustmentBehavior = site.usesBrandedHeader ? .automatic : .never
         webView.scrollView.keyboardDismissMode = .interactive
         webView.accessibilityIdentifier = "apps.browser.\(site.rawValue)"
         observations = [
@@ -102,8 +105,9 @@ final class AppBrowserSession: NSObject, WKNavigationDelegate, WKUIDelegate {
         let path = currentURL?.path.lowercased() ?? "/"
         if let url = currentURL, site.isShortVideo(url) { return .shortVideos }
         if path.hasPrefix("/feed/subscriptions") { return .subscriptions }
-        if path.hasPrefix("/explore") || path == "/results" { return .explore }
+        if path.hasPrefix("/explore") || path == "/results" || path.hasPrefix("/search") { return .explore }
         if path.hasPrefix("/feed/you") || path.hasPrefix("/feed/library") || path.hasPrefix("/accounts") { return .account }
+        if site == .facebook && (path == "/me" || path.hasPrefix("/profile")) { return .account }
         if site == .instagram && path != "/" && !["/p/", "/reel/", "/direct/"].contains(where: path.hasPrefix) { return .account }
         return .home
     }
@@ -119,6 +123,8 @@ final class AppBrowserSession: NSObject, WKNavigationDelegate, WKUIDelegate {
     private var configuration: [String: Any] {
         ["site": site.rawValue, "blockShorts": library?.blocksShortVideos(for: .youtube) ?? false,
          "blockReels": library?.blocksShortVideos(for: .instagram) ?? false,
+         "blockSpotlight": library?.blocksShortVideos(for: .snapchat) ?? false,
+         "blockFacebookReels": library?.blocksShortVideos(for: .facebook) ?? false,
          "hideGoogleCategories": library?.browserPreferences.hideGoogleCategories ?? true,
          "removeBlockedCards": library?.browserPreferences.removeBlockedCards ?? true,
          "blockAds": library?.browserPreferences.blockYouTubeAds ?? false,
@@ -246,6 +252,16 @@ final class AppBrowserSession: NSObject, WKNavigationDelegate, WKUIDelegate {
         }
     }
 
+    func openFacebookMenu() {
+        guard site == .facebook else { return }
+        webView.callAsyncJavaScript("return window.__clearviewApps?.openSiteMenu() ?? false", arguments: [:],
+            in: nil, in: .defaultClient) { [weak self] result in
+                guard let self, self.active else { return }
+                if case .success(let value) = result, value as? Bool == true { return }
+                self.load(self.site.home.appendingPathComponent("bookmarks/"))
+            }
+    }
+
     func openInbox() { load(site.home.appendingPathComponent("direct/inbox/")) }
     func goSearch() {
         guard let url = webView.url, site.owns(url) else { load(site.search); return }
@@ -318,6 +334,10 @@ final class AppBrowserSession: NSObject, WKNavigationDelegate, WKUIDelegate {
         guard active, message.frameInfo.isMainFrame,
               let url = message.frameInfo.request.url, site.owns(url),
               let body = message.body as? [String: Any], let kind = body["kind"] as? String else { return }
+        if kind == "background" {
+            updatePageBackground(body)
+            return
+        }
         if kind == "whitespaceTap" {
             guard body["url"] as? String == webView.url?.absoluteString,
                   !site.isAuthenticationPage(webView.url ?? site.home), blockedPage == nil else { return }
@@ -363,10 +383,11 @@ final class AppBrowserSession: NSObject, WKNavigationDelegate, WKUIDelegate {
                 url: rawURL, isYouTube: AppSite.youtube.owns(webView.url ?? site.home), isShort: row["short"] as? Bool ?? false)
             var decision = ProtectionMatcher.decision(forText: text + " " + creator, rules: localRules)
             if decision == nil { decision = ProtectionEnforcer.verdict(for: subject, rules: globalRules, options: protection.enforcementOptions) }
-            let shortBlocked = subject.isShort && (webView.url.map { current in
-                AppSite.youtube.owns(current) ? library?.blocksShortVideos(for: .youtube) == true
-                    : (AppSite.instagram.owns(current) && library?.blocksShortVideos(for: .instagram) == true)
-            } ?? false)
+            // The host in the address bar decides which app's Shorts/Reels/Spotlight
+            // switch applies, so a link followed from the shared browser is covered too.
+            let shortBlocked = subject.isShort && (webView.url.flatMap { current in
+                AppSite.shortVideoSite(for: current.host)
+            }.map { library?.blocksShortVideos(for: $0) == true } ?? false)
             let isBlocked = decision != nil || shortBlocked
             replies.append(["id": id, "revision": revision, "blocked": isBlocked])
             if isBlocked, reported.insert(subject.id).inserted {
@@ -376,6 +397,20 @@ final class AppBrowserSession: NSObject, WKNavigationDelegate, WKUIDelegate {
         }
         if !activity.isEmpty { protection.noteHidden(activity) }
         invoke("window.__clearviewApps?.resolve(items, document)", arguments: ["items": replies, "document": document])
+    }
+
+    private func updatePageBackground(_ body: [String: Any]) {
+        guard let red = (body["r"] as? NSNumber)?.doubleValue,
+              let green = (body["g"] as? NSNumber)?.doubleValue,
+              let blue = (body["b"] as? NSNumber)?.doubleValue else { return }
+        let alpha = (body["a"] as? NSNumber)?.doubleValue ?? 1
+        let color = UIColor(red: red / 255, green: green / 255, blue: blue / 255,
+                            alpha: max(0, min(1, alpha)))
+        guard color != pageBackground else { return }
+        pageBackground = color
+        webView.backgroundColor = color
+        webView.scrollView.backgroundColor = color
+        webView.underPageBackgroundColor = color
     }
 
     func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction,
