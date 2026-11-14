@@ -526,6 +526,90 @@ final class AppShortVideoTests: XCTestCase {
         XCTAssertEqual(stillVisible, true, "changing only the preview metadata must not hide or re-review the card")
     }
 
+    private func youtubeFixture(_ html: String, path: String = "watch?v=sample") async throws -> WKWebView {
+        let web = WKWebView(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+        web.loadHTMLString("<html><head><meta name='viewport' content='width=device-width,initial-scale=1'><title>Sample video - YouTube</title></head><body style='margin:0'>\(html)</body></html>", baseURL: URL(string: "https://m.youtube.com/\(path)"))
+        for _ in 0..<100 {
+            if !web.isLoading { break }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        let url = try XCTUnwrap(Bundle(for: AppBrowserSession.self).url(forResource: "ClearViewApps", withExtension: "js"))
+        let source = try String(contentsOf: url, encoding: .utf8)
+        _ = try await web.evaluateJavaScript("var clearViewInitial={site:'youtube',appShell:true,active:true};\n" + source + "\nwindow.__clearviewApps.update(clearViewInitial);true;")
+        return web
+    }
+
+    func testYouTubeFullscreenKeepsTitleAndSettingsForTheSameVideo() async throws {
+        let web = try await youtubeFixture("""
+        <div id="player-container-id"><div id="player"><video playsinline></video></div>
+        <div id="player-control-overlay" class="fadein"><button class="fullscreen-button" aria-label="Enter full screen">Expand</button>
+        <button id="settings" onclick="history.pushState(null,'','#settings')">Playback Settings</button></div></div>
+        <ytm-slim-video-metadata-renderer><h1>A useful video title</h1></ytm-slim-video-metadata-renderer>
+        """)
+        _ = try await web.evaluateJavaScript("window.__clearviewApps.updateViewport(844,390);document.querySelector('.fullscreen-button').click();true")
+        let title = try await web.evaluateJavaScript("document.getElementById('clearview-player-title').textContent") as? String
+        XCTAssertEqual(title, "A useful video title")
+        _ = try await web.evaluateJavaScript("document.getElementById('settings').click();window.__clearviewApps.update(clearViewInitial);true")
+        let stillFullscreen = try await web.evaluateJavaScript("document.documentElement.hasAttribute('data-cv-player-fullscreen') && document.querySelector('.fullscreen-button').getAttribute('aria-label')==='Exit full screen'") as? Bool
+        XCTAssertEqual(stillFullscreen, true, "a settings fragment must not close fullscreen or request portrait")
+        _ = try await web.evaluateJavaScript("document.getElementById('player-control-overlay').className='fadeout';true")
+        try await Task.sleep(for: .milliseconds(50))
+        let hidden = try await web.evaluateJavaScript("document.getElementById('clearview-player-title').hidden") as? Bool
+        XCTAssertEqual(hidden, true)
+        _ = try await web.evaluateJavaScript("document.getElementById('player-control-overlay').className='fadein';true")
+        try await Task.sleep(for: .milliseconds(50))
+        let shown = try await web.evaluateJavaScript("!document.getElementById('clearview-player-title').hidden") as? Bool
+        XCTAssertEqual(shown, true, "a tap showing playback controls must also reveal the title")
+        _ = try await web.evaluateJavaScript("document.getElementById('player-control-overlay').insertAdjacentHTML('beforeend', '<button id=\"reveal\" aria-label=\"Show player controls\">Reveal</button>');true")
+        try await Task.sleep(for: .milliseconds(50))
+        let hiddenDuringPlayback = try await web.evaluateJavaScript("document.getElementById('clearview-player-title').hidden") as? Bool
+        XCTAssertEqual(hiddenDuringPlayback, true, "the title must hide when the current mobile player replaces controls with its reveal button")
+        _ = try await web.evaluateJavaScript("document.getElementById('reveal').setAttribute('aria-label','Hide player controls');true")
+        try await Task.sleep(for: .milliseconds(50))
+        let shownWithControls = try await web.evaluateJavaScript("!document.getElementById('clearview-player-title').hidden") as? Bool
+        XCTAssertEqual(shownWithControls, true)
+        _ = try await web.evaluateJavaScript("document.querySelector('video').dispatchEvent(new Event('play'));true")
+        try await Task.sleep(for: .milliseconds(50))
+        let hiddenWhenPlaybackStarts = try await web.evaluateJavaScript("document.getElementById('clearview-player-title').hidden") as? Bool
+        XCTAssertEqual(hiddenWhenPlaybackStarts, true, "starting playback must hide the title even while the controls are visible")
+        _ = try await web.evaluateJavaScript("document.querySelector('video').dispatchEvent(new Event('pause'));true")
+        try await Task.sleep(for: .milliseconds(50))
+        let shownWhenPaused = try await web.evaluateJavaScript("!document.getElementById('clearview-player-title').hidden") as? Bool
+        XCTAssertEqual(shownWhenPaused, true, "pausing should bring the title back with the controls")
+        _ = try await web.evaluateJavaScript("history.pushState(null,'','/watch?v=another');window.__clearviewApps.update(clearViewInitial);true")
+        let exited = try await web.evaluateJavaScript("!document.getElementById('clearview-player-title') && !document.documentElement.hasAttribute('data-cv-player-fullscreen')") as? Bool
+        XCTAssertEqual(exited, true, "switching to a different video must restore the normal page")
+    }
+
+    func testYouTubeCommentsReachThePlayerAndSubscribedButtonHasALabel() async throws {
+        let web = try await youtubeFixture("""
+        <div id="player-container-id" style="height:220px"><video></video></div>
+        <ytm-subscribe-button-renderer class="is-subscribed"><button id="subscribed" style="width:20px" onclick="window.notificationOpened=true"><svg width="16" height="16"></svg></button></ytm-subscribe-button-renderer>
+        <ytm-engagement-panel id="comments" style="position:fixed;top:268px;height:400px;width:100%">
+        <ytm-engagement-panel-section-list-renderer class="engagement-panel-comments-section">Comments</ytm-engagement-panel-section-list-renderer>
+        </ytm-engagement-panel>
+        """)
+        let top = try await web.evaluateJavaScript("document.getElementById('comments').getBoundingClientRect().top") as! Double
+        XCTAssertEqual(top, 220, accuracy: 0.5, "comments must start at the video's bottom, covering the metadata")
+        let label = try await web.evaluateJavaScript("document.getElementById('subscribed').textContent.trim()") as? String
+        XCTAssertEqual(label, "Subscribed")
+        _ = try await web.evaluateJavaScript("window.__clearviewApps.update(clearViewInitial);document.getElementById('subscribed').click();true")
+        let intact = try await web.evaluateJavaScript("window.notificationOpened===true && document.querySelectorAll('[data-cv-subscription-label]').length===1 && document.getElementById('subscribed').getBoundingClientRect().width>=104") as? Bool
+        XCTAssertEqual(intact, true, "a readable subscribed control must retain its original notification action")
+        _ = try await web.evaluateJavaScript("document.getElementById('comments').style.visibility='hidden';window.__clearviewApps.update(clearViewInitial);true")
+        let closed = try await web.evaluateJavaScript("!document.getElementById('comments').hasAttribute('data-cv-comments-panel')") as? Bool
+        XCTAssertEqual(closed, true)
+    }
+
+    func testYouTubeShortsMenuHidesOpenInAppOnly() async throws {
+        let web = try await youtubeFixture("""
+        <div role="dialog"><ytm-menu-navigation-item-renderer id="open"><button><span>Open in app</span></button></ytm-menu-navigation-item-renderer>
+        <button id="share">Share</button><button id="report">Report</button></div>
+        """, path: "shorts/sample")
+        let hidden = try await web.evaluateJavaScript("getComputedStyle(document.getElementById('open')).display==='none' && getComputedStyle(document.getElementById('share')).display!=='none' && getComputedStyle(document.getElementById('report')).display!=='none'") as? Bool
+        XCTAssertEqual(hidden, true, "remove the app handoff without losing other Shorts menu actions")
+    }
+
 }
 
 @MainActor

@@ -68,6 +68,74 @@ final class AppsProtectionUITests: XCTestCase {
     }
 
 
+    /// Opt-in: uses the existing WebKit login and YouTube's real controls.
+    func testYouTubeLandscapeSettingsAndFloatingNavigation() throws {
+        guard ProcessInfo.processInfo.environment["CLEARVIEW_LIVE_YOUTUBE_UI"] == "1" else {
+            throw XCTSkip("Enable CLEARVIEW_LIVE_YOUTUBE_UI to verify the live YouTube player")
+        }
+        let app = XCUIApplication()
+        app.launchArguments = ["--uitesting"]
+        app.launch()
+        app.tabBars.buttons["Apps"].tap()
+        XCTAssertTrue(app.buttons["Open YouTube"].waitForExistence(timeout: 30))
+        app.buttons["Open YouTube"].tap()
+        let home = app.buttons["apps.youtube-home"]
+        XCTAssertTrue(home.waitForExistence(timeout: 20))
+        let nav = app.otherElements["apps.youtube-floating-navigation"]
+        if nav.exists {
+            XCTAssertGreaterThan(nav.frame.minX, 0, "the glass capsule should float away from screen edges")
+            XCTAssertLessThan(nav.frame.maxX, app.frame.width)
+        }
+        app.buttons["Search YouTube"].tap()
+        let field = app.textFields["apps.search.query"]
+        XCTAssertTrue(field.waitForExistence(timeout: 10))
+        field.tap(); field.typeText("Julian Treasure how to speak")
+        app.buttons.matching(identifier: "Search").firstMatch.tap()
+        let video = app.webViews.links.matching(NSPredicate(format: "label CONTAINS %@", "How to Speak So That People Want to Listen")).firstMatch
+        XCTAssertTrue(video.waitForExistence(timeout: 30))
+        video.tap()
+        let showControls = app.buttons["Show player controls"]
+        XCTAssertTrue(showControls.waitForExistence(timeout: 30))
+        showControls.tap()
+        let enter = app.buttons["Enter full screen"]
+        XCTAssertTrue(enter.waitForExistence(timeout: 10))
+        enter.tap()
+        XCTAssertTrue(waitFor(timeout: 15) { app.frame.width > app.frame.height }, "fullscreen should be landscape")
+        let fullscreenTitle = app.webViews.staticTexts["How to Speak So That People Want to Listen | Julian Treasure | TED"]
+        XCTAssertTrue(fullscreenTitle.waitForNonExistence(timeout: 8), "the title must hide when playback controls auto-hide")
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        let pause = app.buttons["Pause video"]
+        XCTAssertTrue(pause.waitForExistence(timeout: 5))
+        XCTAssertFalse(fullscreenTitle.exists, "revealing the controls during playback must not bring the title back")
+        pause.tap()
+        XCTAssertTrue(fullscreenTitle.waitForExistence(timeout: 5), "pausing should show the title with the controls")
+        let settings = app.buttons["Playback Settings"]
+        XCTAssertTrue(settings.waitForExistence(timeout: 10))
+        settings.tap()
+        capture("YouTube landscape playback settings", app: app)
+        let hierarchy = XCTAttachment(string: app.debugDescription)
+        hierarchy.name = "YouTube settings hierarchy"
+        hierarchy.lifetime = .keepAlways
+        add(hierarchy)
+        XCTAssertTrue(app.frame.width > app.frame.height, "opening playback settings must stay in landscape")
+        let quality = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS[c] 'Quality' OR label CONTAINS[c] 'Playback speed'")).firstMatch
+        XCTAssertTrue(quality.waitForExistence(timeout: 10), "YouTube's settings must be visible over the fullscreen player")
+        XCTAssertTrue(quality.isHittable)
+        XCTAssertLessThanOrEqual(quality.frame.maxY, app.frame.height)
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.15, dy: 0.5)).tap()
+        if !app.buttons["Exit full screen"].exists {
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        }
+        let exit = app.buttons["Exit full screen"]
+        XCTAssertTrue(exit.waitForExistence(timeout: 10))
+        exit.tap()
+        XCTAssertTrue(waitFor(timeout: 10) { app.frame.height > app.frame.width }, "exiting should restore portrait")
+        XCTAssertTrue(app.buttons["apps.youtube-home"].waitForExistence(timeout: 10))
+        app.buttons["apps.youtube-home"].tap()
+        XCTAssertTrue(app.buttons["apps.navigation.home"].waitForExistence(timeout: 10))
+        capture("YouTube glass navigation and logo", app: app)
+    }
+
     // MARK: - Helpers
 
     private func openLauncherApp(_ app: XCUIApplication, name: String, capture title: String,

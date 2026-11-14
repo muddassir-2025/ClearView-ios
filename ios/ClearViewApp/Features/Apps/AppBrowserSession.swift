@@ -20,6 +20,7 @@ final class AppBrowserSession: NSObject, WKNavigationDelegate, WKUIDelegate {
     var showsIntentHome = false
     var navigationHidden = false
     var playerFullscreen = false
+    var youtubePanelVisible = false
     var protectionNotice: String?
     /// The page's own background, so the home-indicator strip blends into the
     /// page instead of showing a second bar under it.
@@ -151,12 +152,14 @@ final class AppBrowserSession: NSObject, WKNavigationDelegate, WKUIDelegate {
     }
 
     func setPlayerFullscreen(_ enabled: Bool) {
+        if !enabled { navigationHidden = false }
         guard playerFullscreen != enabled else { return }
         playerFullscreen = enabled
         AppOrientation.set(fullscreen: enabled)
     }
 
     func pause() {
+        youtubePanelVisible = false
         setPlayerFullscreen(false)
         active = false
         finishDialog(nil)
@@ -347,6 +350,10 @@ final class AppBrowserSession: NSObject, WKNavigationDelegate, WKUIDelegate {
         guard active, message.frameInfo.isMainFrame,
               let url = message.frameInfo.request.url, site.owns(url),
               let body = message.body as? [String: Any], let kind = body["kind"] as? String else { return }
+        if kind == "youtubePanel" {
+            youtubePanelVisible = body["visible"] as? Bool ?? false
+            return
+        }
         if kind == "background" {
             updatePageBackground(body)
             return
@@ -475,6 +482,7 @@ final class AppBrowserSession: NSObject, WKNavigationDelegate, WKUIDelegate {
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
         setPlayerFullscreen(false)
+        youtubePanelVisible = false
         isLoading = true
         navigationHidden = false
         showsIntentHome = false

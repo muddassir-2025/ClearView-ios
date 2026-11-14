@@ -109,7 +109,7 @@ struct AppBrandMark: View {
                 Text("G").font(.system(size: size * 0.59, weight: .bold, design: .rounded))
                     .foregroundStyle(AngularGradient(colors: [.blue, .green, .yellow, .red, .blue], center: .center))
             case .youtube:
-                Image(systemName: "play.rectangle.fill").font(.system(size: size * 0.52)).foregroundStyle(.red)
+                YouTubeLogoMark().frame(width: size * 0.64, height: size * 0.46)
             case .instagram:
                 Image(systemName: "camera").font(.system(size: size * 0.51, weight: .medium))
                     .foregroundStyle(LinearGradient(colors: [.purple, .pink, .orange], startPoint: .topTrailing, endPoint: .bottomLeading))
@@ -129,6 +129,25 @@ struct AppBrandMark: View {
         case .facebook: return Color(red: 0.094, green: 0.467, blue: 0.949)
         default: return .white
         }
+    }
+}
+
+/// The play triangle stays white in both light and dark appearances.
+struct YouTubeLogoMark: View {
+    var body: some View {
+        GeometryReader { geometry in
+            ZStack {
+                RoundedRectangle(cornerRadius: geometry.size.height * 0.26, style: .continuous)
+                    .fill(Color(red: 1, green: 0, blue: 0.2))
+                Path { path in
+                    let w = geometry.size.width, h = geometry.size.height
+                    path.move(to: CGPoint(x: w * 0.42, y: h * 0.27))
+                    path.addLine(to: CGPoint(x: w * 0.42, y: h * 0.73))
+                    path.addLine(to: CGPoint(x: w * 0.68, y: h * 0.5))
+                    path.closeSubpath()
+                }.fill(.white)
+            }
+        }.accessibilityHidden(true)
     }
 }
 
