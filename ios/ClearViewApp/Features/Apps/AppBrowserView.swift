@@ -300,13 +300,10 @@ struct AppBrowserView: View {
             .accessibilityIdentifier("apps.youtube-floating-navigation")
     }
 
-    @ViewBuilder private var glassNavigationSurface: some View {
-        if #available(iOS 26.0, *) {
-            youtubeNavigationItems.glassEffect(.regular.interactive(), in: .capsule)
-        } else {
-            youtubeNavigationItems.background(.ultraThinMaterial, in: Capsule())
-                .overlay { Capsule().strokeBorder(.white.opacity(0.18), lineWidth: 0.5) }
-        }
+    private var glassNavigationSurface: some View {
+        youtubeNavigationItems
+            .background(.ultraThinMaterial, in: Capsule())
+            .overlay { Capsule().strokeBorder(.white.opacity(0.18), lineWidth: 0.5) }
     }
 
     private var youtubeNavigationItems: some View {
