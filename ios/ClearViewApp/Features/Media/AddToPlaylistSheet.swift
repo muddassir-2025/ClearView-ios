@@ -118,7 +118,7 @@ struct AddToPlaylistSheet: View {
         // Already in it: the row reports the fact instead of offering a second
         // copy, which is the same rule `MediaLibrary.add` enforces.
         .disabled(holds)
-        .accessibilityLabel("\(playlist.name), \(playlist.videos.count) videos")
+        .accessibilityLabel("\(playlist.name), \(playlist.videos.count) video\(playlist.videos.count == 1 ? "" : "s")")
         .accessibilityIdentifier("playlist.add.\(playlist.id)")
     }
 }

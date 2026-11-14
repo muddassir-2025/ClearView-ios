@@ -47,16 +47,20 @@ final class MediaPlayerUITests: XCTestCase {
         // Clear anything the tap presented before the playlist steps below.
         if app.buttons["Done"].waitForExistence(timeout: 2) { app.buttons["Done"].tap() }
         app.buttons["media.player.playlist"].tap()
-        XCTAssertTrue(app.navigationBars["Add to Playlist"].waitForExistence(timeout: 5))
-        app.buttons["Create playlist"].tap()
-        app.alerts.textFields.firstMatch.typeText("Player test playlist")
+        XCTAssertTrue(app.navigationBars["Add to playlist"].waitForExistence(timeout: 5))
+        app.buttons["playlist.newWithVideo"].tap()
+        let nameField = app.alerts.textFields.firstMatch
+        XCTAssertTrue(nameField.waitForExistence(timeout: 5))
+        nameField.typeText("Player test playlist")
         app.alerts.buttons["Create and add"].tap()
         XCTAssertTrue(app.buttons["media.player.playlist"].waitForExistence(timeout: 5))
         app.buttons["media.player.playlist"].tap()
-        XCTAssertTrue(app.staticTexts["Player test playlist"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.staticTexts["1 videos"].exists)
+        let playlistRow = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "playlist.add.")).firstMatch
+        XCTAssertTrue(playlistRow.waitForExistence(timeout: 5))
+        XCTAssertEqual(playlistRow.label, "Player test playlist, 1 video")
         capture("Player playlist selection", app: app)
-        app.buttons["Cancel"].tap()
+        app.buttons["Done"].tap()
+        XCTAssertTrue(app.navigationBars["Add to playlist"].waitForNonExistence(timeout: 5))
         app.navigationBars.buttons.element(boundBy: 0).tap()
         app.buttons["Feed options"].tap()
         for label in ["Hidden Videos", "Hidden Channels", "Add Video by URL", "Add Video from Device"] { XCTAssertTrue(app.buttons[label].exists) }
