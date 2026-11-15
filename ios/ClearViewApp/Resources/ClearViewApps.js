@@ -177,6 +177,16 @@
       height:auto!important;max-height:calc(var(--cv-player-height,100dvh) - 24px)!important;
       overflow-y:auto!important;display:block!important;z-index:2147483647!important;border-radius:16px;
     }
+    /* Taking the menu out of flow above collapses YouTube's bottom-sheet host
+       to its 21px drag handle. The host still clips with overflow:hidden, so
+       the fixed menu is painted as a thin strip at the bottom. Let it through. */
+    html[data-cv-player-fullscreen="true"] .ytSpecBottomSheetLayoutHost,
+    html[data-cv-player-fullscreen="true"] .ytSpecBottomSheetLayoutContainer,
+    html[data-cv-player-fullscreen="true"] .ytSpecBottomSheetLayoutContentWrapper,
+    html[data-cv-player-fullscreen="true"] .ytSpecBottomSheetLayoutBottomSheetContent,
+    html[data-cv-player-fullscreen="true"] bottom-sheet-layout {
+      overflow:visible!important;
+    }
     [data-cv-comments-panel="true"] {
       position:fixed!important;top:var(--cv-comments-top)!important;bottom:0!important;left:0!important;right:0!important;
       width:100%!important;height:auto!important;max-height:none!important;transform:none!important;z-index:10000!important;

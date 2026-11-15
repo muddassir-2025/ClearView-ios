@@ -112,14 +112,23 @@ final class AppsProtectionUITests: XCTestCase {
         let settings = app.buttons["Playback Settings"]
         XCTAssertTrue(settings.waitForExistence(timeout: 10))
         settings.tap()
+        let quality = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS[c] 'Quality' OR label CONTAINS[c] 'Playback speed'")).firstMatch
+        XCTAssertTrue(quality.waitForExistence(timeout: 10), "YouTube's settings must be visible over the fullscreen player")
+        // Let the menu finish sliding in before capturing it, so the screenshot
+        // records the settled surface rather than a one-frame glimpse.
+        Thread.sleep(forTimeInterval: 1)
         capture("YouTube landscape playback settings", app: app)
+        // The app-window capture can clip a landscape scene to its portrait
+        // column on the simulator; the screen capture keeps the whole panel.
+        let screen = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        screen.name = "YouTube landscape playback settings (full screen)"
+        screen.lifetime = .keepAlways
+        add(screen)
         let hierarchy = XCTAttachment(string: app.debugDescription)
         hierarchy.name = "YouTube settings hierarchy"
         hierarchy.lifetime = .keepAlways
         add(hierarchy)
         XCTAssertTrue(app.frame.width > app.frame.height, "opening playback settings must stay in landscape")
-        let quality = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS[c] 'Quality' OR label CONTAINS[c] 'Playback speed'")).firstMatch
-        XCTAssertTrue(quality.waitForExistence(timeout: 10), "YouTube's settings must be visible over the fullscreen player")
         XCTAssertTrue(quality.isHittable)
         XCTAssertLessThanOrEqual(quality.frame.maxY, app.frame.height)
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.15, dy: 0.5)).tap()
