@@ -71,6 +71,20 @@
   const mark = (element, name, value = 'true') => {
     if (element.getAttribute(name) !== value) element.setAttribute(name, value);
   };
+  // Caption size is optional. With no setting, YouTube's own size and line
+  // height win; a setting overrides only the horizontal player.
+  function applyCaptionSize() {
+    if (!isYouTube) return;
+    const size = Number(config.captionFontSize);
+    const root = document.documentElement;
+    if (Number.isFinite(size) && size >= 12 && size <= 32) {
+      root.setAttribute('data-cv-caption-custom', 'true');
+      root.style.setProperty('--cv-caption-size', size + 'px');
+    } else {
+      root.removeAttribute('data-cv-caption-custom');
+      root.style.removeProperty('--cv-caption-size');
+    }
+  }
 
   const style = document.createElement('style');
   style.id = 'clearview-app-style';
@@ -148,11 +162,80 @@
     }
     [data-cv-fullscreen-player="true"] .ytp-caption-window-container {
       width:100%!important;height:100%!important;z-index:30!important;
+      display:flex!important;justify-content:center!important;
+      pointer-events:none!important;
     }
-    [data-cv-fullscreen-player="true"] .caption-window { top:auto!important;bottom:12%!important; }
+    [data-cv-fullscreen-player="true"] .caption-window {
+      top:auto!important;bottom:6%!important;
+      left:50%!important;right:auto!important;transform:translateX(-50%)!important;
+      text-align:center!important;width:max-content!important;max-width:90%!important;
+      margin-left:0!important;margin-right:0!important;
+      pointer-events:auto!important;
+    }
+    [data-cv-fullscreen-player="true"] .caption-visual-line {
+      text-align:center!important;display:block!important;width:100%!important;
+    }
+    [data-cv-fullscreen-player="true"] .ytp-caption-segment,
+    [data-cv-fullscreen-player="true"] .caption-window,
+    [data-cv-fullscreen-player="true"] .captions-text {
+      text-align:center!important;
+    }
+    html[data-cv-caption-custom="true"] [data-cv-fullscreen-player="true"] .ytp-caption-segment,
+    html[data-cv-caption-custom="true"] [data-cv-fullscreen-player="true"] .caption-window,
+    html[data-cv-caption-custom="true"] [data-cv-fullscreen-player="true"] .captions-text {
+      font-size:var(--cv-caption-size,18px)!important;line-height:1.35!important;
+    }
     [data-cv-fullscreen-player="true"] video {
       width:100%!important;height:100%!important;left:0!important;top:0!important;object-fit:contain!important;
     }
+    [data-cv-fullscreen-player="true"] #player-control-container { z-index:40!important; }
+    [data-cv-fullscreen-player="true"] #player-control-overlay { z-index:41!important; }
+    #clearview-player-title {
+      position:absolute;z-index:50;top:max(14px,env(safe-area-inset-top));left:max(22px,env(safe-area-inset-left));
+      right:170px;margin:0;color:white;font:600 17px/1.35 -apple-system,BlinkMacSystemFont,sans-serif;
+      text-shadow:0 1px 5px #000;pointer-events:none;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;
+    }
+    #clearview-player-title { opacity:1;visibility:visible;transition:opacity .2s ease,visibility 0s; }
+    #clearview-player-title[hidden] {
+      display:-webkit-box!important;opacity:0;visibility:hidden;transition:opacity .2s ease,visibility 0s linear .2s;
+    }
+    html[data-cv-player-fullscreen="true"] bottom-sheet-container,
+    html[data-cv-player-fullscreen="true"] .menu-container,
+    html[data-cv-player-fullscreen="true"] .menu-dialog,
+    html[data-cv-player-fullscreen="true"] .player-settings-menu,
+    html[data-cv-player-fullscreen="true"] .ytp-settings-menu,
+    html[data-cv-player-fullscreen="true"] [role="dialog"] { z-index:2147483647!important; }
+    html[data-cv-player-fullscreen="true"] player-settings-menu {
+      position:fixed!important;top:max(12px,env(safe-area-inset-top))!important;bottom:12px!important;
+      right:max(12px,env(safe-area-inset-right))!important;left:auto!important;transform:none!important;
+      width:320px!important;max-width:calc(var(--cv-player-width,100vw) - 24px)!important;
+      height:auto!important;max-height:calc(var(--cv-player-height,100dvh) - 24px)!important;
+      overflow-y:auto!important;display:block!important;z-index:2147483647!important;border-radius:16px;
+    }
+    /* Taking the menu out of flow above collapses YouTube's bottom-sheet host
+       to its 21px drag handle. The host still clips with overflow:hidden, so
+       the fixed menu is painted as a thin strip at the bottom. Let it through. */
+    html[data-cv-player-fullscreen="true"] .ytSpecBottomSheetLayoutHost,
+    html[data-cv-player-fullscreen="true"] .ytSpecBottomSheetLayoutContainer,
+    html[data-cv-player-fullscreen="true"] .ytSpecBottomSheetLayoutContentWrapper,
+    html[data-cv-player-fullscreen="true"] .ytSpecBottomSheetLayoutBottomSheetContent,
+    html[data-cv-player-fullscreen="true"] bottom-sheet-layout {
+      overflow:visible!important;
+    }
+    [data-cv-comments-panel="true"] {
+      position:fixed!important;top:var(--cv-comments-top)!important;bottom:0!important;left:0!important;right:0!important;
+      width:100%!important;height:auto!important;max-height:none!important;transform:none!important;z-index:10000!important;
+    }
+    [data-cv-comments-panel="true"] > ytm-engagement-panel-section-list-renderer {
+      height:100%!important;max-height:none!important;min-height:0!important;
+    }
+    html[data-cv-app-shell="true"] [data-cv-subscribed="true"] { min-width:112px!important; }
+    html[data-cv-app-shell="true"] [data-cv-subscribed="true"] button {
+      min-width:104px!important;width:auto!important;min-height:34px!important;padding-inline:12px!important;
+      display:flex!important;align-items:center;justify-content:center;gap:7px;color:var(--yt-spec-text-primary,#fff)!important;
+    }
+    html[data-cv-app-shell="true"] [data-cv-subscribed="true"] .ytSmartImationsHost { overflow:visible!important; }
+    [data-cv-subscription-label="true"] { display:inline!important;font:600 13px/1.2 -apple-system,sans-serif;white-space:nowrap; }
     html[data-cv-app-shell="true"] ytm-rich-item-renderer { margin-inline:0!important; }
     html[data-cv-app-shell="true"] .media-item-thumbnail-container,
     html[data-cv-app-shell="true"] .video-thumbnail-container { border-radius:0!important; }
@@ -213,17 +296,185 @@
 
   // YouTube renders captions in HTML above the video. iOS's video-only
   // fullscreen drops that layer, so expand the complete player in this web view.
+  let fullscreenTitle = null;
+  let fullscreenControl = null;
+  let fullscreenControlLabel = null;
+  let controlsObserver = null;
+  let controlsPoll = null;
+  let fullscreenMedia = null;
+  let fullscreenPlaying = false;
+  const fullscreenPlay = () => { fullscreenPlaying = true; syncFullscreenTitle(); };
+  const fullscreenPause = () => { fullscreenPlaying = false; syncFullscreenTitle(); };
+  function playbackControlsVisible() {
+    if (!fullscreenPlayer) return false;
+    const overlay = fullscreenPlayer.querySelector('#player-control-overlay');
+    if (overlay) {
+      const css = getComputedStyle(overlay);
+      if (overlay.classList.contains('fadeout') || overlay.classList.contains('hidden')
+          || overlay.getAttribute('aria-hidden') === 'true' || css.display === 'none'
+          || css.visibility === 'hidden' || Number(css.opacity) === 0) return false;
+    }
+    const displayed = node => node && node.getBoundingClientRect().width > 0
+      && getComputedStyle(node).display !== 'none' && getComputedStyle(node).visibility !== 'hidden';
+    // Current mobile players keep the overlay mounted and change the reveal
+    // button's accessible label instead of applying a fadeout class. The reveal
+    // button can also live outside the player element, so search the page too.
+    const find = label => fullscreenPlayer.querySelector(`[aria-label="${label}"]`)
+      || document.querySelector(`[aria-label="${label}"]`);
+    const hideControl = find('Hide player controls');
+    const showControl = find('Show player controls');
+    if (displayed(showControl) && !displayed(hideControl)) return false;
+    // Some builds only fade the control bar itself, leaving the overlay in place.
+    const seek = fullscreenPlayer.querySelector('#player-control-overlay .player-controls-bottom,#player-control-overlay .player-controls-middle,#player-control-overlay input[type="range"]');
+    if (seek && !displayed(seek)) return false;
+    return true;
+  }
+  function syncFullscreenTitle() {
+    if (!fullscreenPlayer || !fullscreenTitle) return;
+    const currentControl = fullscreenPlayer.querySelector('.fullscreen-icon,.ytp-fullscreen-button,.fullscreen-button');
+    if (currentControl) {
+      if (currentControl !== fullscreenControl) {
+        fullscreenControl = currentControl;
+        fullscreenControlLabel = currentControl.getAttribute('aria-label');
+      }
+      mark(currentControl, 'aria-label', 'Exit full screen');
+    }
+    // The title belongs to the paused state. Once playback starts it leaves the
+    // screen with the controls instead of competing with captions.
+    fullscreenTitle.hidden = fullscreenPlaying || !playbackControlsVisible();
+    const metadata = document.querySelector('ytm-slim-video-metadata-renderer h1,ytm-slim-video-metadata-section-renderer h1,ytm-watch-metadata h1,.slim-video-metadata-title');
+    const title = (metadata?.textContent || document.title.replace(/\s*-\s*YouTube\s*$/, '')).trim();
+    if (fullscreenTitle.textContent !== title) fullscreenTitle.textContent = title;
+  }
+  function watchFullscreenMedia() {
+    const media = fullscreenPlayer?.querySelector('video') || null;
+    if (media === fullscreenMedia) return;
+    fullscreenMedia?.removeEventListener('play', fullscreenPlay);
+    fullscreenMedia?.removeEventListener('pause', fullscreenPause);
+    fullscreenMedia?.removeEventListener('ended', fullscreenPause);
+    fullscreenMedia = media;
+    fullscreenPlaying = Boolean(media && !media.paused && !media.ended);
+    fullscreenMedia?.addEventListener('play', fullscreenPlay);
+    fullscreenMedia?.addEventListener('pause', fullscreenPause);
+    fullscreenMedia?.addEventListener('ended', fullscreenPause);
+  }
+  function installFullscreenTitle(control) {
+    fullscreenControl = control || null;
+    fullscreenControlLabel = control?.getAttribute('aria-label') ?? null;
+    if (control) mark(control, 'aria-label', 'Exit full screen');
+    fullscreenTitle = document.createElement('h2');
+    fullscreenTitle.id = 'clearview-player-title';
+    fullscreenPlayer.append(fullscreenTitle);
+    controlsObserver = new MutationObserver(() => {
+      watchFullscreenMedia();
+      syncFullscreenTitle();
+    });
+    controlsObserver.observe(fullscreenPlayer, {attributes:true,childList:true,subtree:true,attributeFilter:['class','aria-label','aria-hidden','style']});
+    // Some mobile builds fade the controls without mutating a class or label we
+    // can observe. Keep the title in step while the fullscreen player is open.
+    controlsPoll = window.setInterval(() => {
+      watchFullscreenMedia();
+      syncFullscreenTitle();
+    }, 300);
+    watchFullscreenMedia();
+    syncFullscreenTitle();
+  }
+  function removeFullscreenTitle() {
+    controlsObserver?.disconnect(); controlsObserver = null;
+    window.clearInterval(controlsPoll); controlsPoll = null;
+    fullscreenMedia?.removeEventListener('play', fullscreenPlay);
+    fullscreenMedia?.removeEventListener('pause', fullscreenPause);
+    fullscreenMedia?.removeEventListener('ended', fullscreenPause);
+    fullscreenMedia = null;
+    fullscreenPlaying = false;
+    fullscreenTitle?.remove(); fullscreenTitle = null;
+    if (fullscreenControl?.isConnected) {
+      if (fullscreenControlLabel === null) fullscreenControl.removeAttribute('aria-label');
+      else mark(fullscreenControl, 'aria-label', fullscreenControlLabel);
+    }
+    fullscreenControl = null; fullscreenControlLabel = null;
+  }
+
+  let commentsPanelVisible = false;
+  function polishYouTubePage() {
+    if (!isYouTube || !config.appShell || !document.body) return;
+    // Keep the site's subscribed button and its notification action. Some mobile
+    // variants render only a bell inside a collapsed, unlabelled grey capsule.
+    document.querySelectorAll('ytm-subscribe-button-renderer').forEach(renderer => {
+      const subscribed = renderer.classList.contains('is-subscribed') || renderer.hasAttribute('subscribed');
+      if (!subscribed) {
+        renderer.removeAttribute('data-cv-subscribed');
+        renderer.querySelector('[data-cv-subscription-label]')?.remove();
+        return;
+      }
+      mark(renderer, 'data-cv-subscribed');
+      const button = renderer.querySelector('button,[role="button"]');
+      if (!button) return;
+      const content = (button.textContent || '').trim();
+      if (!content && !button.querySelector('[data-cv-subscription-label]')) {
+        const label = document.createElement('span');
+        label.setAttribute('data-cv-subscription-label', 'true');
+        label.textContent = 'Subscribed';
+        button.append(label);
+      }
+    });
+
+    const player = document.querySelector('#player-container-id,#player');
+    const bottom = player?.getBoundingClientRect().bottom;
+    let visible = false;
+    document.querySelectorAll('ytm-engagement-panel').forEach(panel => {
+      const isComments = panel.querySelector('.engagement-panel-comments-section,ytm-comments-header-renderer,ytm-comment-thread-renderer');
+      const rect = panel.getBoundingClientRect(), css = getComputedStyle(panel);
+      const open = isComments && css.display !== 'none' && css.visibility !== 'hidden'
+        && panel.getAttribute('aria-hidden') !== 'true' && rect.width > 0 && rect.height > 0;
+      if (open && !fullscreenPlayer && Number.isFinite(bottom) && bottom > 0 && bottom < innerHeight - 80) {
+        const top = Math.round(bottom) + 'px';
+        if (panel.style.getPropertyValue('--cv-comments-top') !== top) panel.style.setProperty('--cv-comments-top', top);
+        mark(panel, 'data-cv-comments-panel');
+        visible = true;
+      } else panel.removeAttribute('data-cv-comments-panel');
+    });
+    if (shortPath(location.href)) {
+      document.querySelectorAll('ytm-menu-popup-renderer,ytm-bottom-sheet-renderer,[role="dialog"],[role="menu"],.menu-container,.menu-dialog').forEach(menu => {
+        menu.querySelectorAll('a,button,[role="menuitem"],ytm-menu-navigation-item-renderer,ytm-menu-service-item-renderer,yt-list-item-view-model,span').forEach(node => {
+          const label = (node.getAttribute('aria-label') || node.textContent || '').trim();
+          if (!/^open(?: in)? (?:the )?(?:app|youtube)$/i.test(label)) return;
+          const item = node.closest('ytm-menu-navigation-item-renderer,ytm-menu-service-item-renderer,yt-list-item-view-model,[role="menuitem"],a,button') || node;
+          mark(item, 'data-cv-app-prompt');
+        });
+      });
+    }
+    // A menu's custom-element host can have a zero-size box while its fixed
+    // children are visible. Inspect those controls before floating tabs over it.
+    const menuOpen = Array.from(document.querySelectorAll('bottom-sheet-container,[role="dialog"]')).some(menu => {
+      const css = getComputedStyle(menu);
+      if (css.display === 'none' || css.visibility === 'hidden' || menu.getAttribute('aria-hidden') === 'true') return false;
+      return Array.from(menu.querySelectorAll('button,a,[role="menuitem"]')).some(control => {
+        const rect = control.getBoundingClientRect();
+        return !control.closest('[data-cv-app-prompt="true"]') && rect.width > 0 && rect.height > 0
+          && getComputedStyle(control).visibility !== 'hidden';
+      });
+    });
+    visible = visible || menuOpen;
+    if (visible !== commentsPanelVisible) {
+      commentsPanelVisible = visible;
+      send({kind:'youtubePanel',visible});
+    }
+  }
+
   let fullscreenPlayer = null;
   let fullscreenScroll = 0;
-  function setPlayerFullscreen(enabled, player) {
+  function setPlayerFullscreen(enabled, player, control) {
     if (enabled && !fullscreenPlayer) {
       if (!player?.querySelector('video')) return;
       fullscreenScroll = window.scrollY;
       fullscreenPlayer = player;
       player.setAttribute('data-cv-fullscreen-player', 'true');
       document.documentElement.setAttribute('data-cv-player-fullscreen', 'true');
+      installFullscreenTitle(control);
       send({kind:'playerFullscreen', enabled:true});
     } else if (!enabled && fullscreenPlayer) {
+      removeFullscreenTitle();
       fullscreenPlayer.removeAttribute('data-cv-fullscreen-player');
       document.documentElement.removeAttribute('data-cv-player-fullscreen');
       fullscreenPlayer = null;
@@ -242,7 +493,11 @@
     if (!player?.querySelector('video')) return;
     event.preventDefault();
     event.stopImmediatePropagation();
-    setPlayerFullscreen(!fullscreenPlayer, player);
+    setPlayerFullscreen(!fullscreenPlayer, player, control);
+  }, true);
+  document.addEventListener('click', event => {
+    if (!fullscreenPlayer) return;
+    requestAnimationFrame(syncFullscreenTitle);
   }, true);
   document.addEventListener('keydown', event => {
     if (event.key === 'Escape' && fullscreenPlayer) {
@@ -253,7 +508,11 @@
 
   function route() {
     if (lastURL !== location.href) {
-      setPlayerFullscreen(false);
+      const previous = lastURL ? new URL(lastURL) : null;
+      const current = new URL(location.href);
+      const sameWatch = isYouTube && previous?.pathname === '/watch' && current.pathname === '/watch'
+        && previous.searchParams.get('v') === current.searchParams.get('v');
+      if (!sameWatch) setPlayerFullscreen(false);
       lastURL = location.href;
       lastChromeSweep = 0;
       detailCover?.remove();
@@ -660,6 +919,7 @@
     markAppChrome();
     hideAppPrompts();
     reportBackground();
+    polishYouTubePage();
     hideShortLinks();
     filterGoogleCategories();
     skipVideoAds();
@@ -775,6 +1035,7 @@
   const observer = new MutationObserver(schedule);
   function start() {
     if (!document.documentElement) return;
+    applyCaptionSize();
     mount();
     observer.observe(document.documentElement, {subtree:true,childList:true,characterData:true,
       attributes:true,attributeFilter:['href','title','aria-label','alt']});
@@ -787,12 +1048,14 @@
       config = next;
       running = Boolean(next.active);
       reviewEpoch++;
+      applyCaptionSize();
       tracked.forEach(entry => { entry.fingerprint = ''; });
       if (!running) pause(document);
       mount();
       route();
       markAppChrome();
       hideAppPrompts();
+      polishYouTubePage();
       hideShortLinks();
       filterGoogleCategories();
       skipVideoAds();

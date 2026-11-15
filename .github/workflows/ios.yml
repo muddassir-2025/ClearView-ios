@@ -33,7 +33,8 @@ jobs:
             RUNTIME_ID=$(xcrun simctl list runtimes -j | python3 -c 'import json,sys; runtimes=[runtime for runtime in json.load(sys.stdin)["runtimes"] if runtime["name"].startswith("iOS") and runtime["isAvailable"]]; print(max(runtimes, key=lambda runtime: tuple(int(part) for part in runtime["version"].split(".")))["identifier"])')
             DEVICE_ID=$(xcrun simctl create "ClearView Player" "$TYPE_ID" "$RUNTIME_ID")
           fi
-          xcodebuild test -project ios/ClearView.xcodeproj -scheme ClearView -destination "platform=iOS Simulator,id=$DEVICE_ID" -only-testing:ClearViewTests/YouTubePlayerTests -only-testing:ClearViewUITests/MediaPlayerUITests -resultBundlePath PlayerResults.xcresult CODE_SIGNING_ALLOWED=NO 2>&1 | tee player-tests.log
+          ./.github/scripts/simulator-webkit-shim.sh "$DEVICE_ID" "$RUNNER_TEMP/DerivedData"
+          xcodebuild test -project ios/ClearView.xcodeproj -scheme ClearView -destination "platform=iOS Simulator,id=$DEVICE_ID" -derivedDataPath "$RUNNER_TEMP/DerivedData" -only-testing:ClearViewTests/YouTubePlayerTests -only-testing:ClearViewUITests/MediaPlayerUITests -resultBundlePath PlayerResults.xcresult CODE_SIGNING_ALLOWED=NO 2>&1 | tee player-tests.log
       - name: Export player screenshots
         if: always()
         continue-on-error: true
@@ -62,7 +63,8 @@ jobs:
         run: |
           set -euo pipefail
           DEVICE_ID=$(xcrun simctl list devices available -j | python3 -c 'import json,sys; devices=json.load(sys.stdin)["devices"]; print(next(d["udid"] for group in devices.values() for d in group if "iPhone" in d["name"]))')
-          xcodebuild test -project ios/ClearView.xcodeproj -scheme ClearView -destination "platform=iOS Simulator,id=$DEVICE_ID" -resultBundlePath TestResults.xcresult CODE_SIGNING_ALLOWED=NO 2>&1 | tee xcodebuild.log
+          ./.github/scripts/simulator-webkit-shim.sh "$DEVICE_ID" "$RUNNER_TEMP/DerivedData"
+          xcodebuild test -project ios/ClearView.xcodeproj -scheme ClearView -destination "platform=iOS Simulator,id=$DEVICE_ID" -derivedDataPath "$RUNNER_TEMP/DerivedData" -resultBundlePath TestResults.xcresult CODE_SIGNING_ALLOWED=NO 2>&1 | tee xcodebuild.log
       - name: Export UI screenshots
         if: always()
         continue-on-error: true
@@ -85,7 +87,8 @@ jobs:
             RUNTIME_ID=$(xcrun simctl list runtimes -j | python3 -c 'import json,sys; runtimes=[runtime for runtime in json.load(sys.stdin)["runtimes"] if runtime["name"].startswith("iOS") and runtime["isAvailable"]]; print(max(runtimes, key=lambda runtime: tuple(int(part) for part in runtime["version"].split(".")))["identifier"])')
             DEVICE_ID=$(xcrun simctl create "ClearView iPhone SE" "$TYPE_ID" "$RUNTIME_ID")
           fi
-          xcodebuild test -project ios/ClearView.xcodeproj -scheme ClearView -destination "platform=iOS Simulator,id=$DEVICE_ID" -only-testing:ClearViewUITests/DiscoveryUITests -resultBundlePath TestResultsCompact.xcresult CODE_SIGNING_ALLOWED=NO 2>&1 | tee xcodebuild-compact.log
+          ./.github/scripts/simulator-webkit-shim.sh "$DEVICE_ID" "$RUNNER_TEMP/DerivedData"
+          xcodebuild test -project ios/ClearView.xcodeproj -scheme ClearView -destination "platform=iOS Simulator,id=$DEVICE_ID" -derivedDataPath "$RUNNER_TEMP/DerivedData" -only-testing:ClearViewUITests/DiscoveryUITests -resultBundlePath TestResultsCompact.xcresult CODE_SIGNING_ALLOWED=NO 2>&1 | tee xcodebuild-compact.log
       - name: Export compact screenshots
         if: always()
         continue-on-error: true

@@ -244,6 +244,8 @@ struct BrowserProtectionPreferences: Codable, Equatable {
     var hideGoogleCategories = true
     var removeBlockedCards = true
     var blockYouTubeAds = false
+    /// nil keeps YouTube's own caption size. A value overrides the horizontal player only.
+    var captionFontSize: Int?
 }
 
 struct BrowserShortcut: Codable, Identifiable {

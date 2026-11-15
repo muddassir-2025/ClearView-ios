@@ -12,6 +12,8 @@ struct AppBrowserView: View {
     @State private var showSignInHelp = false
     @State private var dialogEntry = ""
     @State private var showSearch = false
+    @Namespace private var navigationSelection
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         browserWithAlerts
@@ -54,8 +56,15 @@ struct AppBrowserView: View {
                     }.frame(maxWidth: .infinity, maxHeight: .infinity).background(Color.cvBackground)
                 }
             }
-            if showsBottomNavigation {
+            if showsBottomNavigation && session.site != .youtube {
                 if session.site.usesAppShell { navigationBar } else { browserToolbar }
+            }
+        }
+        .overlay(alignment: .bottom) {
+            if showsBottomNavigation && session.site == .youtube && !session.bottomBarHidden {
+                youtubeNavigation
+                    .padding(.horizontal, 18).padding(.bottom, 10)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
         .ignoresSafeArea(.container, edges: bottomSafeAreaEdges)
@@ -63,7 +72,12 @@ struct AppBrowserView: View {
         .persistentSystemOverlays(session.playerFullscreen ? .hidden : .automatic)
         .overlay(alignment: .bottomTrailing) {
             if session.navigationHidden && !session.playerFullscreen {
-                Button { withAnimation(.easeInOut(duration: 0.18)) { session.navigationHidden = false } } label: {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.18)) {
+                        session.navigationHidden = false
+                        session.bottomBarHidden = false
+                    }
+                } label: {
                     Image(systemName: "chevron.up").font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(Color.cvPrimary).frame(width: 44, height: 34)
                         .background(Color.cvSurfaceContainerHigh, in: Capsule())
@@ -71,6 +85,7 @@ struct AppBrowserView: View {
             }
         }
         .animation(.easeInOut(duration: 0.18), value: session.navigationHidden)
+        .animation(.easeInOut(duration: 0.22), value: session.bottomBarHidden)
     }
 
     private var configuredBrowser: some View {
@@ -90,7 +105,7 @@ struct AppBrowserView: View {
         .task { session.resume(dark: colorScheme == .dark) }
         .task(id: session.filterSignature) { session.applyPreferences() }
         .onChange(of: scenePhase) { _, phase in
-            if phase == .active { session.resume(dark: colorScheme == .dark) } else { session.pause() }
+            if phase == .active { session.resume(dark: colorScheme == .dark) } else if phase == .background { session.pause() }
         }
         .onChange(of: colorScheme) { _, scheme in session.resume(dark: scheme == .dark) }
         .onChange(of: session.websiteDialog?.id) { _, _ in dialogEntry = session.websiteDialog?.defaultText ?? "" }
@@ -130,7 +145,14 @@ struct AppBrowserView: View {
                 Image(systemName: showsBackButton ? "chevron.left" : "xmark")
                     .font(.system(size: 17, weight: .medium)).frame(width: 40, height: 44)
             }.accessibilityLabel(showsBackButton ? "Back" : "Back to Apps")
-            appTitle.frame(maxWidth: .infinity, alignment: .leading)
+            if session.site == .youtube && session.showsAppNavigation {
+                Button { session.goHome() } label: { appTitle }
+                    .buttonStyle(.plain).accessibilityLabel("YouTube home")
+                    .accessibilityIdentifier("apps.youtube-home")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                appTitle.frame(maxWidth: .infinity, alignment: .leading)
+            }
             if session.showsAppNavigation {
                 // Snapchat's site has no query-based search route; the native
                 // Discover tab is its discovery surface instead.
@@ -189,7 +211,7 @@ struct AppBrowserView: View {
     }
 
     private var showsBottomNavigation: Bool {
-        session.showsAppNavigation && !session.navigationHidden && !session.playerFullscreen && !session.site.usesBrandedHeader
+        session.showsAppNavigation && !session.navigationHidden && !session.playerFullscreen && !session.youtubePanelVisible && !session.site.usesBrandedHeader
     }
 
     private var showsBackButton: Bool {
@@ -233,7 +255,7 @@ struct AppBrowserView: View {
             if session.showsAppNavigation {
                 switch session.site {
                 case .youtube:
-                    Image(systemName: "play.rectangle.fill").font(.system(size: 25)).foregroundStyle(.red)
+                    YouTubeLogoMark().frame(width: 31, height: 22)
                 case .facebook:
                     EmptyView()
                 case .snapchat:
@@ -244,7 +266,8 @@ struct AppBrowserView: View {
             }
             VStack(alignment: .leading, spacing: 2) {
                 Text(session.showsAppNavigation ? (session.site.usesAppShell ? session.site.name : "ClearView") : "Sign in")
-                    .font(.system(size: 21, weight: .bold, design: .rounded)).tracking(-0.7)
+                    .font(.system(size: session.site == .youtube ? 23 : 21, weight: .bold, design: session.site == .youtube ? .default : .rounded))
+                    .fontWidth(session.site == .youtube ? .condensed : .standard).tracking(-0.7)
                     .foregroundStyle(facebookHeader ? Color.blue : headerForeground)
                     .accessibilityIdentifier("browser.title")
                 // A branded app never shows its website address. Google and custom
@@ -273,6 +296,67 @@ struct AppBrowserView: View {
 
     private var visibleDestinations: [AppDestination] {
         session.site.destinations.filter { $0 != .shortVideos || !session.blocksShortVideos }
+    }
+
+    private var youtubeNavigation: some View {
+        glassNavigationSurface
+            .frame(maxWidth: 440)
+            .shadow(color: .black.opacity(0.25), radius: 14, y: 6)
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("apps.youtube-floating-navigation")
+    }
+
+    private var glassNavigationSurface: some View {
+        youtubeNavigationItems
+            .background(.ultraThinMaterial, in: Capsule())
+            .overlay { Capsule().strokeBorder(.white.opacity(0.18), lineWidth: 0.5) }
+    }
+
+    private var youtubeNavigationItems: some View {
+        HStack(spacing: 2) {
+            ForEach(visibleDestinations) { destination in
+                let selected = session.selectedDestination == destination
+                Button { session.navigate(destination) } label: {
+                    VStack(spacing: 3) {
+                        youtubeTabIcon(destination, selected: selected).frame(width: 25, height: 25)
+                        Text(destination.title(for: session.site))
+                            .font(.system(size: 10, weight: selected ? .semibold : .medium))
+                            .lineLimit(1).minimumScaleFactor(0.8)
+                    }
+                    .foregroundStyle(selected ? Color.white : Color.white.opacity(0.75))
+                    .frame(maxWidth: .infinity, minHeight: 54)
+                    .background {
+                        if selected {
+                            Capsule().fill(.white.opacity(0.16))
+                                .overlay { Capsule().strokeBorder(.white.opacity(0.16), lineWidth: 0.5) }
+                                .matchedGeometryEffect(id: "youtube-selection", in: navigationSelection)
+                        }
+                    }
+                    .contentShape(Capsule())
+                }.buttonStyle(.plain)
+                    .accessibilityLabel(destination.title(for: session.site))
+                    .accessibilityAddTraits(selected ? .isSelected : [])
+                    .accessibilityIdentifier("apps.navigation.\(destination.rawValue)")
+            }
+        }.padding(5)
+            .animation(reduceMotion ? nil : .spring(response: 0.35, dampingFraction: 0.8), value: session.selectedDestination)
+    }
+
+    @ViewBuilder private func youtubeTabIcon(_ destination: AppDestination, selected: Bool) -> some View {
+        if destination == .shortVideos {
+            YouTubeShortsMark().stroke(style: StrokeStyle(lineWidth: 1.9, lineCap: .round, lineJoin: .round))
+                .overlay { Image(systemName: "play.fill").font(.system(size: 8, weight: .semibold)) }
+        } else if destination == .subscriptions {
+            ZStack {
+                RoundedRectangle(cornerRadius: 3).stroke(lineWidth: 1.8).frame(width: 24, height: 16).offset(y: 3)
+                Capsule().frame(width: 18, height: 1.7).offset(y: -9)
+                Capsule().frame(width: 14, height: 1.7).offset(y: -12)
+                Image(systemName: "play.fill").font(.system(size: 8)).offset(y: 3)
+            }
+        } else {
+            Image(systemName: destination.symbol(selected: selected))
+                .font(.system(size: 23, weight: selected ? .semibold : .regular))
+        }
     }
 
     private var navigationBar: some View {
@@ -347,5 +431,26 @@ private struct AppWebsiteView: UIViewRepresentable {
     func updateUIView(_ uiView: WKWebView, context: Context) { }
     static func dismantleUIView(_ uiView: WKWebView, coordinator: ()) {
         uiView.pauseAllMediaPlayback(completionHandler: nil)
+    }
+}
+
+/// A compact ribbon silhouette distinguishes Shorts from ordinary videos.
+private struct YouTubeShortsMark: Shape {
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        func point(_ x: CGFloat, _ y: CGFloat) -> CGPoint { CGPoint(x: rect.minX + x * rect.width / 24, y: rect.minY + y * rect.height / 24) }
+        path.move(to: point(14.5, 2))
+        path.addCurve(to: point(20, 7.8), control1: point(19.2, -0.5), control2: point(23, 5.1))
+        path.addLine(to: point(15.8, 10.3))
+        path.addLine(to: point(18.1, 11.5))
+        path.addCurve(to: point(18.2, 18), control1: point(22, 13.7), control2: point(21.4, 16.2))
+        path.addLine(to: point(9.4, 23))
+        path.addCurve(to: point(4, 17.1), control1: point(4.9, 25.5), control2: point(0.9, 20.1))
+        path.addLine(to: point(8.1, 14.7))
+        path.addLine(to: point(5.9, 13.4))
+        path.addCurve(to: point(5.8, 6.9), control1: point(2.2, 11.3), control2: point(2.5, 8.7))
+        path.addLine(to: point(14.5, 2))
+        path.closeSubpath()
+        return path
     }
 }

@@ -207,6 +207,36 @@ final class AppShortVideoTests: XCTestCase {
         XCTAssertTrue(reopened.blocksShortVideos(for: .facebook))
     }
 
+    /// Caption size is opt-in: nil keeps YouTube's own size, and a chosen size
+    /// survives a relaunch.
+    func testCaptionFontSizeIsOptionalAndPersists() {
+        let library = AppsLibrary(defaults: defaults)
+        XCTAssertNil(library.browserPreferences.captionFontSize, "YouTube's own caption size is the default")
+
+        library.updateBrowser { $0.captionFontSize = 24 }
+        XCTAssertEqual(library.browserPreferences.captionFontSize, 24)
+
+        let reopened = AppsLibrary(defaults: defaults)
+        XCTAssertEqual(reopened.browserPreferences.captionFontSize, 24, "the caption size survives a relaunch")
+
+        reopened.updateBrowser { $0.captionFontSize = nil }
+        XCTAssertNil(AppsLibrary(defaults: defaults).browserPreferences.captionFontSize,
+                     "turning the override off restores YouTube's size")
+    }
+
+    /// Preference data written before the caption setting existed must keep
+    /// decoding, or adding the setting would reset every other switch.
+    func testLegacyBrowserPreferencesWithoutCaptionSizeStillDecode() {
+        let legacy = #"{"hideGoogleCategories":false,"removeBlockedCards":false,"blockYouTubeAds":true}"#
+        defaults.set(Data(legacy.utf8), forKey: "apps.browser-protection.v1")
+
+        let library = AppsLibrary(defaults: defaults)
+        XCTAssertNil(library.browserPreferences.captionFontSize)
+        XCTAssertFalse(library.browserPreferences.hideGoogleCategories)
+        XCTAssertFalse(library.browserPreferences.removeBlockedCards)
+        XCTAssertTrue(library.browserPreferences.blockYouTubeAds)
+    }
+
     /// The address bar decides which switch applies, so a link reached through the
     /// shared browser is covered without opening that app from the launcher.
     func testTheHostInTheAddressBarSelectsTheSwitch() {
@@ -271,10 +301,7 @@ final class AppShortVideoTests: XCTestCase {
           <div id="promo" style="position:fixed;bottom:0;width:100%;height:80px;background:white"><button style="background:blue;width:100%;height:44px"><span><a href="https://apps.apple.com/app/facebook/id284882215">Open app</a></span></button></div>
         </body></html>
         """, baseURL: URL(string: "https://m.facebook.com/"))
-        for _ in 0..<100 {
-            if !web.isLoading { break }
-            try await Task.sleep(for: .milliseconds(50))
-        }
+        try await waitForDocumentReady(web)
         let scriptURL = try XCTUnwrap(Bundle(for: AppBrowserSession.self).url(forResource: "ClearViewApps", withExtension: "js"))
         let source = try String(contentsOf: scriptURL, encoding: .utf8)
         _ = try await web.evaluateJavaScript("""
@@ -322,10 +349,7 @@ final class AppShortVideoTests: XCTestCase {
         <button class="ytp-fullscreen-button" aria-label="Full screen" onclick="window.videoOnlyFullscreen=true">Full screen</button>
         </div></div></ytm-app></body></html>
         """, baseURL: URL(string: "https://m.youtube.com/"))
-        for _ in 0..<100 {
-            if !web.isLoading { break }
-            try await Task.sleep(for: .milliseconds(50))
-        }
+        try await waitForDocumentReady(web)
         let scriptURL = try XCTUnwrap(Bundle(for: AppBrowserSession.self).url(forResource: "ClearViewApps", withExtension: "js"))
         let source = try String(contentsOf: scriptURL, encoding: .utf8)
         _ = try await web.evaluateJavaScript("""
@@ -356,6 +380,47 @@ final class AppShortVideoTests: XCTestCase {
         XCTAssertEqual(paused, true, "leaving the app must exit the expanded player")
     }
 
+    func testYouTubeFullscreenCaptionsAreCenteredAndLoweredInHorizontalPlayer() async throws {
+        let web = try await youtubeFixture("""
+        <div id="player-container-id"><div id="player"><video playsinline></video>
+          <div class="ytp-caption-window-container">
+            <div class="caption-window ytp-caption-window-bottom" style="left:100px;font-size:18px;text-align:left">
+              <span class="caption-visual-line">
+                <span class="ytp-caption-segment" style="font-size:18px">Captioned content line</span>
+              </span>
+            </div>
+          </div>
+          <div id="player-control-overlay" class="fadein"><button class="fullscreen-button" aria-label="Enter full screen">Expand</button></div>
+        </div></div>
+        """)
+        let portraitAlign = try await web.evaluateJavaScript("getComputedStyle(document.querySelector('.caption-window')).textAlign") as? String
+        let portraitSize = try await web.evaluateJavaScript("getComputedStyle(document.querySelector('.ytp-caption-segment')).fontSize") as? String
+        XCTAssertEqual(portraitAlign, "left", "portrait captions must remain untouched")
+        XCTAssertEqual(portraitSize, "18px", "portrait captions must keep default font size")
+
+        _ = try await web.evaluateJavaScript("window.__clearviewApps.updateViewport(844,390);document.querySelector('.fullscreen-button').click();true")
+        let landscapeAlign = try await web.evaluateJavaScript("getComputedStyle(document.querySelector('.caption-window')).textAlign") as? String
+        let landscapeLineAlign = try await web.evaluateJavaScript("getComputedStyle(document.querySelector('.caption-visual-line')).textAlign") as? String
+        let landscapeSize = try await web.evaluateJavaScript("getComputedStyle(document.querySelector('.ytp-caption-segment')).fontSize") as? String
+        let transform = try await web.evaluateJavaScript("getComputedStyle(document.querySelector('.caption-window')).transform") as? String
+        let bottom = try await web.evaluateJavaScript("getComputedStyle(document.querySelector('.caption-window')).bottom") as? String
+
+        XCTAssertEqual(landscapeAlign, "center", "captions in horizontal player must be centered")
+        XCTAssertEqual(landscapeLineAlign, "center", "caption visual lines in horizontal player must be centered")
+        XCTAssertEqual(landscapeSize, "18px", "without a custom size, horizontal captions keep YouTube's own font size")
+        XCTAssertNotNil(transform, "caption window must have center transform")
+        XCTAssertNotEqual(transform, "none", "caption window must be centered via transform")
+        XCTAssertEqual(bottom, "6%", "captions must be lowered to 6% of the viewport")
+
+        _ = try await web.evaluateJavaScript("clearViewInitial.captionFontSize=20;window.__clearviewApps.update(clearViewInitial);true")
+        let customSize = try await web.evaluateJavaScript("getComputedStyle(document.querySelector('.ytp-caption-segment')).fontSize") as? String
+        XCTAssertEqual(customSize, "20px", "the caption-size setting must override the horizontal caption size")
+
+        _ = try await web.evaluateJavaScript("document.querySelector('.fullscreen-button').click();true")
+        let portraitAfterOverride = try await web.evaluateJavaScript("getComputedStyle(document.querySelector('.ytp-caption-segment')).fontSize") as? String
+        XCTAssertEqual(portraitAfterOverride, "18px", "the caption-size setting must not change portrait captions")
+    }
+
     func testYouTubeWatchPlayerConsumesReservedTopbarSlot() async throws {
         let web = WKWebView(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
         web.loadHTMLString("""
@@ -367,10 +432,7 @@ final class AppShortVideoTests: XCTestCase {
         <div id="player" class="html5-video-player"><div class="html5-video-container"><video playsinline></video></div></div>
         </div></div></ytm-app></body></html>
         """, baseURL: URL(string: "https://m.youtube.com/watch?v=abc123")!)
-        for _ in 0..<100 {
-            if !web.isLoading { break }
-            try await Task.sleep(for: .milliseconds(50))
-        }
+        try await waitForDocumentReady(web)
         let scriptURL = try XCTUnwrap(Bundle(for: AppBrowserSession.self).url(forResource: "ClearViewApps", withExtension: "js"))
         let source = try String(contentsOf: scriptURL, encoding: .utf8)
         _ = try await web.evaluateJavaScript("""
@@ -394,6 +456,56 @@ final class AppShortVideoTests: XCTestCase {
                        "fullscreen must allow both landscape directions, never portrait")
         XCTAssertEqual(AppOrientation.mask(fullscreen: false), .portrait,
                        "closing the player must return the browser to portrait")
+    }
+
+    // MARK: - Floating bottom bar
+
+    /// YouTube's bottom bar leaves while the feed moves down and returns as soon
+    /// as the reader scrolls back up. The first callback only anchors the
+    /// tracker, and a small movement must not make it flicker.
+    func testBottomBarHidesOnScrollDownAndReturnsOnScrollUp() {
+        var tracker = BottomBarScrollTracker()
+        XCTAssertNil(tracker.update(offset: 0, topInset: 0, userDriven: true),
+                     "the first callback anchors the gesture")
+        XCTAssertNil(tracker.update(offset: 8, topInset: 0, userDriven: true),
+                     "a small movement must not flicker the bar")
+        XCTAssertEqual(tracker.update(offset: 20, topInset: 0, userDriven: true), true,
+                       "scrolling down past the threshold hides the bar")
+        XCTAssertEqual(tracker.update(offset: 80, topInset: 0, userDriven: true), true,
+                       "continuing down keeps it hidden")
+        XCTAssertNil(tracker.update(offset: 72, topInset: 0, userDriven: true),
+                     "a tiny upward move must not bring it back")
+        XCTAssertEqual(tracker.update(offset: 58, topInset: 0, userDriven: true), false,
+                       "scrolling up past the threshold brings the bar back")
+    }
+
+    /// Slow drags arrive as many one-point callbacks; the tracker must add them
+    /// up. A programmatic scroll moves the anchor without moving the bar.
+    func testBottomBarAccumulatesSlowDragsAndIgnoresProgrammaticScrolls() {
+        var tracker = BottomBarScrollTracker()
+        _ = tracker.update(offset: 0, topInset: 0, userDriven: true)
+        var hidden: Bool?
+        for offset in 1...14 {
+            hidden = tracker.update(offset: CGFloat(offset), topInset: 0, userDriven: true) ?? hidden
+        }
+        XCTAssertEqual(hidden, true, "a slow drag must cross the threshold")
+
+        _ = tracker.update(offset: 400, topInset: 0, userDriven: false)
+        XCTAssertNil(tracker.update(offset: 390, topInset: 0, userDriven: true),
+                     "a programmatic jump must not count as an upward scroll")
+        XCTAssertEqual(tracker.update(offset: 300, topInset: 0, userDriven: true), false)
+    }
+
+    func testBottomBarReturnsAtTheTopOfThePageAndAfterNavigation() {
+        var tracker = BottomBarScrollTracker()
+        _ = tracker.update(offset: 0, topInset: 0, userDriven: true)
+        XCTAssertEqual(tracker.update(offset: 40, topInset: 0, userDriven: true), true)
+
+        XCTAssertEqual(tracker.update(offset: -64, topInset: 64, userDriven: true), false,
+                       "reaching the top always shows the bar, even during a bounce")
+        tracker.reset()
+        XCTAssertNil(tracker.update(offset: 0, topInset: 0, userDriven: true),
+                     "a new page starts with the bar showing")
     }
 
     /// YouTube's watch-next feed shows a floating row of filter chips ("All",
@@ -424,10 +536,7 @@ final class AppShortVideoTests: XCTestCase {
           <ytm-rich-item-renderer><a href="/watch?v=abc123">A related video</a></ytm-rich-item-renderer>
         </div></ytm-app></body></html>
         """, baseURL: URL(string: "https://m.youtube.com/watch?v=abc123")!)
-        for _ in 0..<100 {
-            if !web.isLoading { break }
-            try await Task.sleep(for: .milliseconds(50))
-        }
+        try await waitForDocumentReady(web)
         let scriptURL = try XCTUnwrap(Bundle(for: AppBrowserSession.self).url(forResource: "ClearViewApps", withExtension: "js"))
         let source = try String(contentsOf: scriptURL, encoding: .utf8)
         _ = try await web.evaluateJavaScript("""
@@ -484,10 +593,7 @@ final class AppShortVideoTests: XCTestCase {
           <ytm-rich-item-renderer id="card"><a href="/watch?v=abc123">Quiet video</a><span id="meta">1 view</span></ytm-rich-item-renderer>
         </div></ytm-app></body></html>
         """, baseURL: URL(string: "https://m.youtube.com/")!)
-        for _ in 0..<100 {
-            if !web.isLoading { break }
-            try await Task.sleep(for: .milliseconds(50))
-        }
+        try await waitForDocumentReady(web)
         let scriptURL = try XCTUnwrap(Bundle(for: AppBrowserSession.self).url(forResource: "ClearViewApps", withExtension: "js"))
         let source = try String(contentsOf: scriptURL, encoding: .utf8)
         _ = try await web.evaluateJavaScript("""
@@ -524,6 +630,130 @@ final class AppShortVideoTests: XCTestCase {
         return !card.hasAttribute('data-cv-review') && !card.hasAttribute('data-cv-hidden');})()
         """) as? Bool
         XCTAssertEqual(stillVisible, true, "changing only the preview metadata must not hide or re-review the card")
+    }
+
+    private func waitForDocumentReady(_ web: WKWebView) async throws {
+        for _ in 0..<100 {
+            let ready = try? await web.evaluateJavaScript("document.readyState === 'complete' && location.protocol === 'https:'") as? Bool
+            if ready == true { return }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+    }
+
+    private func youtubeFixture(_ html: String, path: String = "watch?v=sample",
+                                size: CGSize = CGSize(width: 390, height: 844)) async throws -> WKWebView {
+        let web = WKWebView(frame: CGRect(origin: .zero, size: size))
+        web.loadHTMLString("<html><head><meta name='viewport' content='width=device-width,initial-scale=1'><title>Sample video - YouTube</title></head><body style='margin:0'>\(html)</body></html>", baseURL: URL(string: "https://m.youtube.com/\(path)"))
+        try await waitForDocumentReady(web)
+        let url = try XCTUnwrap(Bundle(for: AppBrowserSession.self).url(forResource: "ClearViewApps", withExtension: "js"))
+        let source = try String(contentsOf: url, encoding: .utf8)
+        _ = try await web.evaluateJavaScript("var clearViewInitial={site:'youtube',appShell:true,active:true};\n" + source + "\nwindow.__clearviewApps.update(clearViewInitial);true;")
+        return web
+    }
+
+    func testYouTubeFullscreenKeepsTitleAndSettingsForTheSameVideo() async throws {
+        let web = try await youtubeFixture("""
+        <div id="player-container-id"><div id="player"><video playsinline></video></div>
+        <div id="player-control-overlay" class="fadein"><button class="fullscreen-button" aria-label="Enter full screen">Expand</button>
+        <button id="settings" onclick="history.pushState(null,'','#settings')">Playback Settings</button></div></div>
+        <ytm-slim-video-metadata-renderer><h1>A useful video title</h1></ytm-slim-video-metadata-renderer>
+        """)
+        _ = try await web.evaluateJavaScript("window.__clearviewApps.updateViewport(844,390);document.querySelector('.fullscreen-button').click();true")
+        let title = try await web.evaluateJavaScript("document.getElementById('clearview-player-title').textContent") as? String
+        XCTAssertEqual(title, "A useful video title")
+        _ = try await web.evaluateJavaScript("document.getElementById('settings').click();window.__clearviewApps.update(clearViewInitial);true")
+        let stillFullscreen = try await web.evaluateJavaScript("document.documentElement.hasAttribute('data-cv-player-fullscreen') && document.querySelector('.fullscreen-button').getAttribute('aria-label')==='Exit full screen'") as? Bool
+        XCTAssertEqual(stillFullscreen, true, "a settings fragment must not close fullscreen or request portrait")
+        _ = try await web.evaluateJavaScript("document.getElementById('player-control-overlay').className='fadeout';true")
+        try await Task.sleep(for: .milliseconds(50))
+        let hidden = try await web.evaluateJavaScript("document.getElementById('clearview-player-title').hidden") as? Bool
+        XCTAssertEqual(hidden, true)
+        _ = try await web.evaluateJavaScript("document.getElementById('player-control-overlay').className='fadein';true")
+        try await Task.sleep(for: .milliseconds(50))
+        let shown = try await web.evaluateJavaScript("!document.getElementById('clearview-player-title').hidden") as? Bool
+        XCTAssertEqual(shown, true, "a tap showing playback controls must also reveal the title")
+        _ = try await web.evaluateJavaScript("document.getElementById('player-control-overlay').insertAdjacentHTML('beforeend', '<button id=\"reveal\" aria-label=\"Show player controls\">Reveal</button>');true")
+        try await Task.sleep(for: .milliseconds(50))
+        let hiddenDuringPlayback = try await web.evaluateJavaScript("document.getElementById('clearview-player-title').hidden") as? Bool
+        XCTAssertEqual(hiddenDuringPlayback, true, "the title must hide when the current mobile player replaces controls with its reveal button")
+        _ = try await web.evaluateJavaScript("document.getElementById('reveal').setAttribute('aria-label','Hide player controls');true")
+        try await Task.sleep(for: .milliseconds(50))
+        let shownWithControls = try await web.evaluateJavaScript("!document.getElementById('clearview-player-title').hidden") as? Bool
+        XCTAssertEqual(shownWithControls, true)
+        _ = try await web.evaluateJavaScript("document.querySelector('video').dispatchEvent(new Event('play'));true")
+        try await Task.sleep(for: .milliseconds(50))
+        let hiddenWhenPlaybackStarts = try await web.evaluateJavaScript("document.getElementById('clearview-player-title').hidden") as? Bool
+        XCTAssertEqual(hiddenWhenPlaybackStarts, true, "starting playback must hide the title even while the controls are visible")
+        _ = try await web.evaluateJavaScript("document.querySelector('video').dispatchEvent(new Event('pause'));true")
+        try await Task.sleep(for: .milliseconds(50))
+        let shownWhenPaused = try await web.evaluateJavaScript("!document.getElementById('clearview-player-title').hidden") as? Bool
+        XCTAssertEqual(shownWhenPaused, true, "pausing should bring the title back with the controls")
+        _ = try await web.evaluateJavaScript("history.pushState(null,'','/watch?v=another');window.__clearviewApps.update(clearViewInitial);true")
+        let exited = try await web.evaluateJavaScript("!document.getElementById('clearview-player-title') && !document.documentElement.hasAttribute('data-cv-player-fullscreen')") as? Bool
+        XCTAssertEqual(exited, true, "switching to a different video must restore the normal page")
+    }
+
+    /// YouTube renders the player settings inside its new bottom-sheet layout.
+    /// That host collapses to the drag handle once the menu is positioned out
+    /// of flow, and keeps `overflow:hidden`, which used to clip the settings to
+    /// a strip at the bottom of a landscape player. Hit-testing the menu center
+    /// is the honest check: a clipped menu can still exist in the document.
+    func testYouTubeFullscreenSettingsEscapeTheCollapsedBottomSheetHost() async throws {
+        let web = try await youtubeFixture("""
+        <div id="player-container-id"><div id="player"><video playsinline></video></div>
+        <div id="player-control-overlay" class="fadein"><button class="fullscreen-button" aria-label="Enter full screen">Expand</button></div></div>
+        <bottom-sheet-container role="dialog" style="position:fixed;left:62px;top:0;width:750px;height:0">
+          <div class="ytSpecBottomSheetLayoutHost ytSpecBottomSheetLayoutContainer ytSpecBottomSheetLayoutModern" style="position:fixed;left:237px;top:357px;width:400px;height:21px;overflow:hidden">
+            <div class="ytSpecBottomSheetLayoutBottomSheetContent">
+              <div class="ytSpecBottomSheetLayoutContentWrapper" style="overflow:auto">
+                <player-settings-menu role="menu" style="position:static;width:400px;height:378px">
+                  <button id="quality" style="position:absolute;inset:0;width:100%;height:100%">Quality 360p</button>
+                </player-settings-menu>
+              </div>
+            </div>
+          </div>
+        </bottom-sheet-container>
+        """, size: CGSize(width: 874, height: 402))
+        _ = try await web.evaluateJavaScript("window.__clearviewApps.updateViewport(874,402);document.querySelector('.fullscreen-button').click();true")
+        let hit = try await web.evaluateJavaScript("""
+        (() => {
+          const button = document.getElementById('quality');
+          const rect = button.getBoundingClientRect();
+          const atCenter = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+          return { hit: atCenter === button, rect: [rect.x, rect.y, rect.width, rect.height] };
+        })()
+        """) as? [String: Any]
+        XCTAssertEqual(hit?["hit"] as? Bool, true,
+                       "the settings menu must stay clickable when the fullscreen bottom-sheet host collapses")
+    }
+
+    func testYouTubeCommentsReachThePlayerAndSubscribedButtonHasALabel() async throws {
+        let web = try await youtubeFixture("""
+        <div id="player-container-id" style="height:220px"><video></video></div>
+        <ytm-subscribe-button-renderer class="is-subscribed"><button id="subscribed" style="width:20px" onclick="window.notificationOpened=true"><svg width="16" height="16"></svg></button></ytm-subscribe-button-renderer>
+        <ytm-engagement-panel id="comments" style="position:fixed;top:268px;height:400px;width:100%">
+        <ytm-engagement-panel-section-list-renderer class="engagement-panel-comments-section">Comments</ytm-engagement-panel-section-list-renderer>
+        </ytm-engagement-panel>
+        """)
+        let top = try await web.evaluateJavaScript("document.getElementById('comments').getBoundingClientRect().top") as! Double
+        XCTAssertEqual(top, 220, accuracy: 0.5, "comments must start at the video's bottom, covering the metadata")
+        let label = try await web.evaluateJavaScript("document.getElementById('subscribed').textContent.trim()") as? String
+        XCTAssertEqual(label, "Subscribed")
+        _ = try await web.evaluateJavaScript("window.__clearviewApps.update(clearViewInitial);document.getElementById('subscribed').click();true")
+        let intact = try await web.evaluateJavaScript("window.notificationOpened===true && document.querySelectorAll('[data-cv-subscription-label]').length===1 && document.getElementById('subscribed').getBoundingClientRect().width>=104") as? Bool
+        XCTAssertEqual(intact, true, "a readable subscribed control must retain its original notification action")
+        _ = try await web.evaluateJavaScript("document.getElementById('comments').style.visibility='hidden';window.__clearviewApps.update(clearViewInitial);true")
+        let closed = try await web.evaluateJavaScript("!document.getElementById('comments').hasAttribute('data-cv-comments-panel')") as? Bool
+        XCTAssertEqual(closed, true)
+    }
+
+    func testYouTubeShortsMenuHidesOpenInAppOnly() async throws {
+        let web = try await youtubeFixture("""
+        <div role="dialog"><ytm-menu-navigation-item-renderer id="open"><button><span>Open in app</span></button></ytm-menu-navigation-item-renderer>
+        <button id="share">Share</button><button id="report">Report</button></div>
+        """, path: "shorts/sample")
+        let hidden = try await web.evaluateJavaScript("getComputedStyle(document.getElementById('open')).display==='none' && getComputedStyle(document.getElementById('share')).display!=='none' && getComputedStyle(document.getElementById('report')).display!=='none'") as? Bool
+        XCTAssertEqual(hidden, true, "remove the app handoff without losing other Shorts menu actions")
     }
 
 }
