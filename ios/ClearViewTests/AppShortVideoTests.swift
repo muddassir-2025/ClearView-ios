@@ -350,6 +350,37 @@ final class AppShortVideoTests: XCTestCase {
         XCTAssertEqual(paused, true, "leaving the app must exit the expanded player")
     }
 
+    func testYouTubeFullscreenCaptionsAreCenteredAndScaledDownInHorizontalPlayer() async throws {
+        let web = try await youtubeFixture("""
+        <div id="player-container-id"><div id="player"><video playsinline></video>
+          <div class="ytp-caption-window-container">
+            <div class="caption-window ytp-caption-window-bottom" style="left:100px;font-size:18px;text-align:left">
+              <span class="caption-visual-line">
+                <span class="ytp-caption-segment" style="font-size:18px">Captioned content line</span>
+              </span>
+            </div>
+          </div>
+          <div id="player-control-overlay" class="fadein"><button class="fullscreen-button" aria-label="Enter full screen">Expand</button></div>
+        </div></div>
+        """)
+        let portraitAlign = try await web.evaluateJavaScript("getComputedStyle(document.querySelector('.caption-window')).textAlign") as? String
+        let portraitSize = try await web.evaluateJavaScript("getComputedStyle(document.querySelector('.ytp-caption-segment')).fontSize") as? String
+        XCTAssertEqual(portraitAlign, "left", "portrait captions must remain untouched")
+        XCTAssertEqual(portraitSize, "18px", "portrait captions must keep default font size")
+
+        _ = try await web.evaluateJavaScript("window.__clearviewApps.updateViewport(844,390);document.querySelector('.fullscreen-button').click();true")
+        let landscapeAlign = try await web.evaluateJavaScript("getComputedStyle(document.querySelector('.caption-window')).textAlign") as? String
+        let landscapeLineAlign = try await web.evaluateJavaScript("getComputedStyle(document.querySelector('.caption-visual-line')).textAlign") as? String
+        let landscapeSize = try await web.evaluateJavaScript("getComputedStyle(document.querySelector('.ytp-caption-segment')).fontSize") as? String
+        let transform = try await web.evaluateJavaScript("getComputedStyle(document.querySelector('.caption-window')).transform") as? String
+
+        XCTAssertEqual(landscapeAlign, "center", "captions in horizontal player must be centered")
+        XCTAssertEqual(landscapeLineAlign, "center", "caption visual lines in horizontal player must be centered")
+        XCTAssertEqual(landscapeSize, "15px", "captions in horizontal player must be scaled down to 15px")
+        XCTAssertNotNil(transform, "caption window must have center transform")
+        XCTAssertNotEqual(transform, "none", "caption window must be centered via transform")
+    }
+
     func testYouTubeWatchPlayerConsumesReservedTopbarSlot() async throws {
         let web = WKWebView(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
         web.loadHTMLString("""
