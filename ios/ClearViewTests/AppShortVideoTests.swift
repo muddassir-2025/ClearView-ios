@@ -377,7 +377,7 @@ final class AppShortVideoTests: XCTestCase {
 
         XCTAssertEqual(landscapeAlign, "center", "captions in horizontal player must be centered")
         XCTAssertEqual(landscapeLineAlign, "center", "caption visual lines in horizontal player must be centered")
-        XCTAssertEqual(landscapeSize, "18px", "captions in horizontal player must retain their default font size")
+        XCTAssertEqual(landscapeSize, "17px", "captions in horizontal player must be 17px")
         XCTAssertNotNil(transform, "caption window must have center transform")
         XCTAssertNotEqual(transform, "none", "caption window must be centered via transform")
         XCTAssertEqual(bottom, "6%", "captions must be lowered to 6% of the viewport")

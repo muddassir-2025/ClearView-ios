@@ -164,6 +164,7 @@
     [data-cv-fullscreen-player="true"] .ytp-caption-segment,
     [data-cv-fullscreen-player="true"] .caption-window,
     [data-cv-fullscreen-player="true"] .captions-text {
+      font-size:17px!important;line-height:1.35!important;
       text-align:center!important;
     }
     [data-cv-fullscreen-player="true"] video {
