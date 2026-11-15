@@ -152,7 +152,7 @@
       pointer-events:none!important;
     }
     [data-cv-fullscreen-player="true"] .caption-window {
-      top:auto!important;bottom:12%!important;
+      top:auto!important;bottom:6%!important;
       left:50%!important;right:auto!important;transform:translateX(-50%)!important;
       text-align:center!important;width:max-content!important;max-width:90%!important;
       margin-left:0!important;margin-right:0!important;
@@ -164,7 +164,6 @@
     [data-cv-fullscreen-player="true"] .ytp-caption-segment,
     [data-cv-fullscreen-player="true"] .caption-window,
     [data-cv-fullscreen-player="true"] .captions-text {
-      font-size:15px!important;line-height:1.35!important;
       text-align:center!important;
     }
     [data-cv-fullscreen-player="true"] video {

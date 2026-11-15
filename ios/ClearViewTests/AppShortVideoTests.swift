@@ -350,7 +350,7 @@ final class AppShortVideoTests: XCTestCase {
         XCTAssertEqual(paused, true, "leaving the app must exit the expanded player")
     }
 
-    func testYouTubeFullscreenCaptionsAreCenteredAndScaledDownInHorizontalPlayer() async throws {
+    func testYouTubeFullscreenCaptionsAreCenteredAndLoweredInHorizontalPlayer() async throws {
         let web = try await youtubeFixture("""
         <div id="player-container-id"><div id="player"><video playsinline></video>
           <div class="ytp-caption-window-container">
@@ -373,12 +373,14 @@ final class AppShortVideoTests: XCTestCase {
         let landscapeLineAlign = try await web.evaluateJavaScript("getComputedStyle(document.querySelector('.caption-visual-line')).textAlign") as? String
         let landscapeSize = try await web.evaluateJavaScript("getComputedStyle(document.querySelector('.ytp-caption-segment')).fontSize") as? String
         let transform = try await web.evaluateJavaScript("getComputedStyle(document.querySelector('.caption-window')).transform") as? String
+        let bottom = try await web.evaluateJavaScript("getComputedStyle(document.querySelector('.caption-window')).bottom") as? String
 
         XCTAssertEqual(landscapeAlign, "center", "captions in horizontal player must be centered")
         XCTAssertEqual(landscapeLineAlign, "center", "caption visual lines in horizontal player must be centered")
-        XCTAssertEqual(landscapeSize, "15px", "captions in horizontal player must be scaled down to 15px")
+        XCTAssertEqual(landscapeSize, "18px", "captions in horizontal player must retain their default font size")
         XCTAssertNotNil(transform, "caption window must have center transform")
         XCTAssertNotEqual(transform, "none", "caption window must be centered via transform")
+        XCTAssertEqual(bottom, "6%", "captions must be lowered to 6% of the viewport")
     }
 
     func testYouTubeWatchPlayerConsumesReservedTopbarSlot() async throws {
