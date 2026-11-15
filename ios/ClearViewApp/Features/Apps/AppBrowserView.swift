@@ -72,7 +72,12 @@ struct AppBrowserView: View {
         .persistentSystemOverlays(session.playerFullscreen ? .hidden : .automatic)
         .overlay(alignment: .bottomTrailing) {
             if session.navigationHidden && !session.playerFullscreen {
-                Button { withAnimation(.easeInOut(duration: 0.18)) { session.navigationHidden = false } } label: {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.18)) {
+                        session.navigationHidden = false
+                        session.bottomBarHidden = false
+                    }
+                } label: {
                     Image(systemName: "chevron.up").font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(Color.cvPrimary).frame(width: 44, height: 34)
                         .background(Color.cvSurfaceContainerHigh, in: Capsule())
