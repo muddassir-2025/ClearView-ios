@@ -71,6 +71,20 @@
   const mark = (element, name, value = 'true') => {
     if (element.getAttribute(name) !== value) element.setAttribute(name, value);
   };
+  // Caption size is optional. With no setting, YouTube's own size and line
+  // height win; a setting overrides only the horizontal player.
+  function applyCaptionSize() {
+    if (!isYouTube) return;
+    const size = Number(config.captionFontSize);
+    const root = document.documentElement;
+    if (Number.isFinite(size) && size >= 12 && size <= 32) {
+      root.setAttribute('data-cv-caption-custom', 'true');
+      root.style.setProperty('--cv-caption-size', size + 'px');
+    } else {
+      root.removeAttribute('data-cv-caption-custom');
+      root.style.removeProperty('--cv-caption-size');
+    }
+  }
 
   const style = document.createElement('style');
   style.id = 'clearview-app-style';
@@ -164,8 +178,12 @@
     [data-cv-fullscreen-player="true"] .ytp-caption-segment,
     [data-cv-fullscreen-player="true"] .caption-window,
     [data-cv-fullscreen-player="true"] .captions-text {
-      font-size:17px!important;line-height:1.35!important;
       text-align:center!important;
+    }
+    html[data-cv-caption-custom="true"] [data-cv-fullscreen-player="true"] .ytp-caption-segment,
+    html[data-cv-caption-custom="true"] [data-cv-fullscreen-player="true"] .caption-window,
+    html[data-cv-caption-custom="true"] [data-cv-fullscreen-player="true"] .captions-text {
+      font-size:var(--cv-caption-size,18px)!important;line-height:1.35!important;
     }
     [data-cv-fullscreen-player="true"] video {
       width:100%!important;height:100%!important;left:0!important;top:0!important;object-fit:contain!important;
@@ -1017,6 +1035,7 @@
   const observer = new MutationObserver(schedule);
   function start() {
     if (!document.documentElement) return;
+    applyCaptionSize();
     mount();
     observer.observe(document.documentElement, {subtree:true,childList:true,characterData:true,
       attributes:true,attributeFilter:['href','title','aria-label','alt']});
@@ -1029,6 +1048,7 @@
       config = next;
       running = Boolean(next.active);
       reviewEpoch++;
+      applyCaptionSize();
       tracked.forEach(entry => { entry.fingerprint = ''; });
       if (!running) pause(document);
       mount();

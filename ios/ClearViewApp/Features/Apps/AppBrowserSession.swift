@@ -73,6 +73,11 @@ final class AppBrowserSession: NSObject, WKNavigationDelegate, WKUIDelegate {
         webView.scrollView.backgroundColor = .cvBackground
         webView.scrollView.contentInsetAdjustmentBehavior = site.usesBrandedHeader ? .automatic : .never
         webView.scrollView.keyboardDismissMode = .interactive
+        webView.scrollView.alwaysBounceVertical = true
+        let refreshControl = UIRefreshControl()
+        refreshControl.tintColor = .cvBarSelected
+        refreshControl.addTarget(self, action: #selector(refreshFromPull), for: .valueChanged)
+        webView.scrollView.refreshControl = refreshControl
         webView.accessibilityIdentifier = "apps.browser.\(site.rawValue)"
         observations = [
             webView.observe(\.estimatedProgress) { [weak self] view, _ in
@@ -130,6 +135,7 @@ final class AppBrowserSession: NSObject, WKNavigationDelegate, WKUIDelegate {
          "hideGoogleCategories": library?.browserPreferences.hideGoogleCategories ?? true,
          "removeBlockedCards": library?.browserPreferences.removeBlockedCards ?? true,
          "blockAds": library?.browserPreferences.blockYouTubeAds ?? false,
+         "captionFontSize": library?.browserPreferences.captionFontSize ?? 0,
          "active": active, "appShell": site.usesAppShell,
          "dark": webView?.traitCollection.userInterfaceStyle != .light]
     }
@@ -480,6 +486,15 @@ final class AppBrowserSession: NSObject, WKNavigationDelegate, WKUIDelegate {
         }
     }
 
+    @objc private func refreshFromPull() {
+        guard !playerFullscreen else {
+            webView.scrollView.refreshControl?.endRefreshing()
+            return
+        }
+        if webView.isLoading { webView.stopLoading() }
+        webView.reload()
+    }
+
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
         setPlayerFullscreen(false)
         youtubePanelVisible = false
@@ -493,6 +508,7 @@ final class AppBrowserSession: NSObject, WKNavigationDelegate, WKUIDelegate {
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         isLoading = false
         errorMessage = nil
+        webView.scrollView.refreshControl?.endRefreshing()
         applyPreferences()
         if !active { webView.pauseAllMediaPlayback(completionHandler: nil) }
     }
@@ -502,11 +518,13 @@ final class AppBrowserSession: NSObject, WKNavigationDelegate, WKUIDelegate {
     private func failed(_ error: Error) {
         guard (error as NSError).code != NSURLErrorCancelled else { return }
         isLoading = false
+        webView.scrollView.refreshControl?.endRefreshing()
         errorMessage = "\(site.name) couldn’t load. Check your connection and try again."
     }
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         isLoading = false
+        webView.scrollView.refreshControl?.endRefreshing()
         errorMessage = "\(site.name) needs to reload. Your saved login is still on this device."
     }
 

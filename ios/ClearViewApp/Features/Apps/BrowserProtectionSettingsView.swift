@@ -48,10 +48,11 @@ struct BrowserProtectionSettingsView: View {
                 }.listRowBackground(Color.cvSurfaceContainerLow)
 
                 Section {
+                    captionSizeSetting
                     setting("Block YouTube ads", detail: "Refuses ad requests, removes ad slots and skips video ads.", symbol: "hand.raised",
                             value: browserBinding(\.blockYouTubeAds), id: "browser.block-youtube-ads")
                 } header: { Text("YouTube") } footer: {
-                    Text("YouTube can change how ads are delivered; some ads may still get through.")
+                    Text("Caption size applies to the expanded horizontal player. YouTube default keeps the size chosen in YouTube's own caption settings. YouTube can change how ads are delivered; some ads may still get through.")
                 }.listRowBackground(Color.cvSurfaceContainerLow)
 
                 Section {
@@ -75,6 +76,43 @@ struct BrowserProtectionSettingsView: View {
 
     private func shortBinding(_ site: AppSite) -> Binding<Bool> {
         Binding(get: { library.blocksShortVideos(for: site) }, set: { value in library.update(site) { $0.blockShortVideos = value } })
+    }
+    /// Off by default so YouTube's own caption size wins until the reader asks for a custom one.
+    private var captionSizeSetting: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Toggle(isOn: Binding(
+                get: { library.browserPreferences.captionFontSize != nil },
+                set: { enabled in library.updateBrowser { $0.captionFontSize = enabled ? 22 : nil } }
+            )) {
+                HStack(alignment: .top, spacing: 12) {
+                    Image(systemName: "textformat.size").font(.system(size: 18)).foregroundStyle(Color.cvPrimary).frame(width: 24).padding(.top, 2)
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text("Custom caption size").font(.subheadline.weight(.semibold)).foregroundStyle(Color.cvOnSurface)
+                        Text("Overrides the size YouTube uses for captions in the horizontal player.").font(.caption).foregroundStyle(Color.cvOnSurfaceVariant).fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }.tint(.cvPrimary).accessibilityIdentifier("browser.custom-caption-size")
+
+            if let size = library.browserPreferences.captionFontSize {
+                HStack(spacing: 12) {
+                    Slider(value: Binding(
+                        get: { Double(library.browserPreferences.captionFontSize ?? size) },
+                        set: { value in library.updateBrowser { $0.captionFontSize = Int(value.rounded()) } }
+                    ), in: 14...32, step: 1)
+                        .accessibilityLabel("Caption font size")
+                        .accessibilityIdentifier("browser.caption-font-size")
+                    Text("\(size) px").font(.subheadline.monospacedDigit()).foregroundStyle(Color.cvOnSurfaceVariant)
+                        .frame(width: 52, alignment: .trailing).accessibilityIdentifier("browser.caption-font-size-value")
+                }.padding(.leading, 36)
+
+                Text("Captions preview")
+                    .font(.system(size: CGFloat(size), weight: .medium))
+                    .foregroundStyle(.white).frame(maxWidth: .infinity)
+                    .padding(.vertical, 10)
+                    .background(.black.opacity(0.82), in: RoundedRectangle(cornerRadius: 10))
+                    .accessibilityIdentifier("browser.caption-preview")
+            }
+        }.padding(.vertical, 7)
     }
     private func browserBinding(_ path: WritableKeyPath<BrowserProtectionPreferences, Bool>) -> Binding<Bool> {
         Binding(get: { library.browserPreferences[keyPath: path] }, set: { value in library.updateBrowser { $0[keyPath: path] = value } })

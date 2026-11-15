@@ -207,6 +207,36 @@ final class AppShortVideoTests: XCTestCase {
         XCTAssertTrue(reopened.blocksShortVideos(for: .facebook))
     }
 
+    /// Caption size is opt-in: nil keeps YouTube's own size, and a chosen size
+    /// survives a relaunch.
+    func testCaptionFontSizeIsOptionalAndPersists() {
+        let library = AppsLibrary(defaults: defaults)
+        XCTAssertNil(library.browserPreferences.captionFontSize, "YouTube's own caption size is the default")
+
+        library.updateBrowser { $0.captionFontSize = 24 }
+        XCTAssertEqual(library.browserPreferences.captionFontSize, 24)
+
+        let reopened = AppsLibrary(defaults: defaults)
+        XCTAssertEqual(reopened.browserPreferences.captionFontSize, 24, "the caption size survives a relaunch")
+
+        reopened.updateBrowser { $0.captionFontSize = nil }
+        XCTAssertNil(AppsLibrary(defaults: defaults).browserPreferences.captionFontSize,
+                     "turning the override off restores YouTube's size")
+    }
+
+    /// Preference data written before the caption setting existed must keep
+    /// decoding, or adding the setting would reset every other switch.
+    func testLegacyBrowserPreferencesWithoutCaptionSizeStillDecode() {
+        let legacy = #"{"hideGoogleCategories":false,"removeBlockedCards":false,"blockYouTubeAds":true}"#
+        defaults.set(Data(legacy.utf8), forKey: "apps.browser-protection.v1")
+
+        let library = AppsLibrary(defaults: defaults)
+        XCTAssertNil(library.browserPreferences.captionFontSize)
+        XCTAssertFalse(library.browserPreferences.hideGoogleCategories)
+        XCTAssertFalse(library.browserPreferences.removeBlockedCards)
+        XCTAssertTrue(library.browserPreferences.blockYouTubeAds)
+    }
+
     /// The address bar decides which switch applies, so a link reached through the
     /// shared browser is covered without opening that app from the launcher.
     func testTheHostInTheAddressBarSelectsTheSwitch() {
@@ -377,10 +407,18 @@ final class AppShortVideoTests: XCTestCase {
 
         XCTAssertEqual(landscapeAlign, "center", "captions in horizontal player must be centered")
         XCTAssertEqual(landscapeLineAlign, "center", "caption visual lines in horizontal player must be centered")
-        XCTAssertEqual(landscapeSize, "17px", "captions in horizontal player must be 17px")
+        XCTAssertEqual(landscapeSize, "18px", "without a custom size, horizontal captions keep YouTube's own font size")
         XCTAssertNotNil(transform, "caption window must have center transform")
         XCTAssertNotEqual(transform, "none", "caption window must be centered via transform")
         XCTAssertEqual(bottom, "6%", "captions must be lowered to 6% of the viewport")
+
+        _ = try await web.evaluateJavaScript("clearViewInitial.captionFontSize=20;window.__clearviewApps.update(clearViewInitial);true")
+        let customSize = try await web.evaluateJavaScript("getComputedStyle(document.querySelector('.ytp-caption-segment')).fontSize") as? String
+        XCTAssertEqual(customSize, "20px", "the caption-size setting must override the horizontal caption size")
+
+        _ = try await web.evaluateJavaScript("document.querySelector('.fullscreen-button').click();true")
+        let portraitAfterOverride = try await web.evaluateJavaScript("getComputedStyle(document.querySelector('.ytp-caption-segment')).fontSize") as? String
+        XCTAssertEqual(portraitAfterOverride, "18px", "the caption-size setting must not change portrait captions")
     }
 
     func testYouTubeWatchPlayerConsumesReservedTopbarSlot() async throws {
