@@ -19,6 +19,9 @@ final class AppBrowserSession: NSObject, WKNavigationDelegate, WKUIDelegate {
     var unsupportedLink = false
     var showsIntentHome = false
     var navigationHidden = false
+    /// The floating bottom bar steps out of the way while the reader scrolls
+    /// down, then returns as soon as they scroll up, the way YouTube's does.
+    var bottomBarHidden = false
     var playerFullscreen = false
     var youtubePanelVisible = false
     var protectionNotice: String?
@@ -41,6 +44,7 @@ final class AppBrowserSession: NSObject, WKNavigationDelegate, WKUIDelegate {
     @ObservationIgnored private var pendingURL: URL?
     @ObservationIgnored private var loadRevision = 0
     @ObservationIgnored private var adRuleList: WKContentRuleList?
+    @ObservationIgnored private var bottomBarScroll = BottomBarScrollTracker()
 
     init(site: AppSite, library: AppsLibrary) {
         self.site = site
@@ -95,6 +99,15 @@ final class AppBrowserSession: NSObject, WKNavigationDelegate, WKUIDelegate {
             webView.observe(\.url) { [weak self] view, _ in
                 let value = view.url
                 Task { @MainActor in self?.currentURL = value }
+            },
+            webView.scrollView.observe(\.contentOffset) { [weak self] scrollView, _ in
+                let offset = scrollView.contentOffset.y
+                let topInset = scrollView.adjustedContentInset.top
+                // Deceleration continues the same gesture after the finger lifts.
+                let userDriven = scrollView.isDragging || scrollView.isDecelerating
+                Task { @MainActor in
+                    self?.trackBottomBarScroll(offset: offset, topInset: topInset, userDriven: userDriven)
+                }
             },
         ]
     }
@@ -161,7 +174,21 @@ final class AppBrowserSession: NSObject, WKNavigationDelegate, WKUIDelegate {
         if !enabled { navigationHidden = false }
         guard playerFullscreen != enabled else { return }
         playerFullscreen = enabled
+        resetBottomBarScroll()
         AppOrientation.set(fullscreen: enabled)
+    }
+
+    /// Feeds the page's scroll position to the bar's tracker. Programmatic
+    /// scrolls still move the tracker's anchor but never move the bar.
+    private func trackBottomBarScroll(offset: CGFloat, topInset: CGFloat, userDriven: Bool) {
+        guard let hidden = bottomBarScroll.update(offset: offset, topInset: topInset, userDriven: userDriven),
+              hidden != bottomBarHidden else { return }
+        bottomBarHidden = hidden
+    }
+
+    private func resetBottomBarScroll() {
+        bottomBarHidden = false
+        bottomBarScroll.reset()
     }
 
     func pause() {
@@ -294,8 +321,8 @@ final class AppBrowserSession: NSObject, WKNavigationDelegate, WKUIDelegate {
                 self.load(self.site.search)
             }
     }
-    func goBack() { rejectedURL = nil; blockedPage = nil; errorMessage = nil; navigationHidden = false; webView.goBack() }
-    func goForward() { rejectedURL = nil; blockedPage = nil; errorMessage = nil; navigationHidden = false; webView.goForward() }
+    func goBack() { rejectedURL = nil; blockedPage = nil; errorMessage = nil; navigationHidden = false; resetBottomBarScroll(); webView.goBack() }
+    func goForward() { rejectedURL = nil; blockedPage = nil; errorMessage = nil; navigationHidden = false; resetBottomBarScroll(); webView.goForward() }
     func reload() {
         guard scriptAvailable else { return }
         errorMessage = nil
@@ -312,6 +339,7 @@ final class AppBrowserSession: NSObject, WKNavigationDelegate, WKUIDelegate {
         pendingURL = nil
         showsIntentHome = false
         navigationHidden = false
+        resetBottomBarScroll()
         loadRevision += 1
         let revision = loadRevision
         guard !isBlockedShortURL(url) else {
@@ -500,6 +528,7 @@ final class AppBrowserSession: NSObject, WKNavigationDelegate, WKUIDelegate {
         youtubePanelVisible = false
         isLoading = true
         navigationHidden = false
+        resetBottomBarScroll()
         showsIntentHome = false
         errorMessage = nil
         blockedPage = nil
@@ -580,6 +609,47 @@ final class AppBrowserSession: NSObject, WKNavigationDelegate, WKUIDelegate {
         let kind: Kind
         let defaultText: String
         let complete: (String?) -> Void
+    }
+}
+
+/// Turns the page's scroll travel into the floating bar's hide/show state.
+///
+/// Only user-driven movement counts: a programmatic scroll, such as the
+/// fullscreen player pinning the feed, moves the anchor but leaves the bar
+/// alone. Travel accumulates across callbacks so a slow drag still crosses the
+/// threshold even when each callback moves only a point or two.
+struct BottomBarScrollTracker {
+    private(set) var lastOffset: CGFloat?
+    private var travel: CGFloat = 0
+
+    static let threshold: CGFloat = 12
+
+    /// - Returns: the bar's new hidden state, or `nil` to leave it as it is.
+    mutating func update(offset: CGFloat, topInset: CGFloat, userDriven: Bool) -> Bool? {
+        defer { lastOffset = offset }
+        guard userDriven, let previous = lastOffset else { return nil }
+        // At the top of the page the bar is always home.
+        if offset <= -topInset + 1 {
+            travel = 0
+            return false
+        }
+        let delta = offset - previous
+        if delta * travel < 0 { travel = 0 }
+        travel += delta
+        if travel > Self.threshold {
+            travel = 0
+            return true
+        }
+        if travel < -Self.threshold {
+            travel = 0
+            return false
+        }
+        return nil
+    }
+
+    mutating func reset() {
+        lastOffset = nil
+        travel = 0
     }
 }
 

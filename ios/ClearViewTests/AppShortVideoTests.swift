@@ -458,6 +458,56 @@ final class AppShortVideoTests: XCTestCase {
                        "closing the player must return the browser to portrait")
     }
 
+    // MARK: - Floating bottom bar
+
+    /// YouTube's bottom bar leaves while the feed moves down and returns as soon
+    /// as the reader scrolls back up. The first callback only anchors the
+    /// tracker, and a small movement must not make it flicker.
+    func testBottomBarHidesOnScrollDownAndReturnsOnScrollUp() {
+        var tracker = BottomBarScrollTracker()
+        XCTAssertNil(tracker.update(offset: 0, topInset: 0, userDriven: true),
+                     "the first callback anchors the gesture")
+        XCTAssertNil(tracker.update(offset: 8, topInset: 0, userDriven: true),
+                     "a small movement must not flicker the bar")
+        XCTAssertEqual(tracker.update(offset: 20, topInset: 0, userDriven: true), true,
+                       "scrolling down past the threshold hides the bar")
+        XCTAssertEqual(tracker.update(offset: 80, topInset: 0, userDriven: true), true,
+                       "continuing down keeps it hidden")
+        XCTAssertNil(tracker.update(offset: 72, topInset: 0, userDriven: true),
+                     "a tiny upward move must not bring it back")
+        XCTAssertEqual(tracker.update(offset: 58, topInset: 0, userDriven: true), false,
+                       "scrolling up past the threshold brings the bar back")
+    }
+
+    /// Slow drags arrive as many one-point callbacks; the tracker must add them
+    /// up. A programmatic scroll moves the anchor without moving the bar.
+    func testBottomBarAccumulatesSlowDragsAndIgnoresProgrammaticScrolls() {
+        var tracker = BottomBarScrollTracker()
+        _ = tracker.update(offset: 0, topInset: 0, userDriven: true)
+        var hidden: Bool?
+        for offset in 1...14 {
+            hidden = tracker.update(offset: CGFloat(offset), topInset: 0, userDriven: true) ?? hidden
+        }
+        XCTAssertEqual(hidden, true, "a slow drag must cross the threshold")
+
+        _ = tracker.update(offset: 400, topInset: 0, userDriven: false)
+        XCTAssertNil(tracker.update(offset: 390, topInset: 0, userDriven: true),
+                     "a programmatic jump must not count as an upward scroll")
+        XCTAssertEqual(tracker.update(offset: 300, topInset: 0, userDriven: true), false)
+    }
+
+    func testBottomBarReturnsAtTheTopOfThePageAndAfterNavigation() {
+        var tracker = BottomBarScrollTracker()
+        _ = tracker.update(offset: 0, topInset: 0, userDriven: true)
+        XCTAssertEqual(tracker.update(offset: 40, topInset: 0, userDriven: true), true)
+
+        XCTAssertEqual(tracker.update(offset: -64, topInset: 64, userDriven: true), false,
+                       "reaching the top always shows the bar, even during a bounce")
+        tracker.reset()
+        XCTAssertNil(tracker.update(offset: 0, topInset: 0, userDriven: true),
+                     "a new page starts with the bar showing")
+    }
+
     /// YouTube's watch-next feed shows a floating row of filter chips ("All",
     /// "From <channel>", "Related", "For you") while scrolling. Only the chip
     /// renderers are removed. A surrounding layout slot can also contain the

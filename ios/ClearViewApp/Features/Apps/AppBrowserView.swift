@@ -61,7 +61,7 @@ struct AppBrowserView: View {
             }
         }
         .overlay(alignment: .bottom) {
-            if showsBottomNavigation && session.site == .youtube {
+            if showsBottomNavigation && session.site == .youtube && !session.bottomBarHidden {
                 youtubeNavigation
                     .padding(.horizontal, 18).padding(.bottom, 10)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
@@ -80,6 +80,7 @@ struct AppBrowserView: View {
             }
         }
         .animation(.easeInOut(duration: 0.18), value: session.navigationHidden)
+        .animation(.easeInOut(duration: 0.22), value: session.bottomBarHidden)
     }
 
     private var configuredBrowser: some View {
